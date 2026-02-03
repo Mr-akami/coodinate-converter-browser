@@ -16,7 +16,7 @@
 ```sh
 nix develop
 ```
-上記で `emcc` / `emcmake` / `cmake` / `ninja` などが揃う想定。
+上記で `emcc` / `emcmake` / `cmake` / `ninja` / `sqlite3` / `curl` などが揃う想定。
 
 ## サブモジュール追加（初回のみ）
 ```sh
@@ -28,29 +28,10 @@ git submodule update --init --recursive
 1. CMake で静的ライブラリをビルド
 
 ```sh
-emcmake cmake -S third_party/proj -B build/proj-wasm \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=OFF \
-  -DBUILD_TESTING=OFF
-
-cmake --build build/proj-wasm -j
+./scripts/build-proj-wasm.sh
 ```
-
-2. ラッパーを含めて Wasm 化（例）
-
-```sh
-emcc src/proj_wasm.c build/proj-wasm/src/libproj.a \
-  -O3 \
-  -sMODULARIZE=1 \
-  -sEXPORT_ES6=1 \
-  -sENVIRONMENT=web,worker \
-  -sWASMFS=1 \
-  -sFILESYSTEM=1 \
-  -sALLOW_MEMORY_GROWTH=1 \
-  -sEXPORTED_FUNCTIONS=_proj_init,_proj_transform,_proj_clear_cache,_proj_cleanup \
-  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS \
-  -o dist/proj_wasm.js
-```
+デフォルトで SQLite/zlib/libtiff を Wasm 用にビルドし、PROJ をリンク。
+必要に応じて `WITH_TIFF=0` で TIFF を無効化できます。
 
 ## ラッパー設計（例）
 - `proj_init(data_dir)` で検索パスと DB パスを設定。
@@ -81,6 +62,20 @@ await Module.FS.mkdir('/opfs');
 await Module.FS.mount(Module.FS.filesystems.OPFS, {}, '/opfs');
 // proj-data を /opfs/proj に展開した想定
 Module.ccall('proj_init', 'number', ['string'], ['/opfs/proj']);
+```
+
+## proj-data 展開（Worker）
+`proj-data` は `.tar.gz` を前提にし、Worker で OPFS に展開する。
+
+```js
+import { ensureProjData } from './opfs/proj-data.js';
+
+await ensureProjData({
+  url: '/assets/proj-data.tar.gz',
+  version: '2025-02-01',
+  dirName: 'proj-data',
+  onProgress: (p) => console.log(p),
+});
 ```
 
 ## 注意点

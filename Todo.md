@@ -4,6 +4,7 @@
 3. `proj` を git submodule として追加（`third_party/proj`）。
 4. `proj` Wasm ビルド用のスクリプトを作成。
 5. Nix 開発環境（`flake.nix`）を用意。
+6. OPFS への proj-data 展開フロー（Worker + バージョン管理）を実装。
 3. OPFS への展開フローを PoC（Worker + WasmFS）。
 4. `proj` のデータ検索パスを OPFS に向ける方法を検証。
 5. `proj` C API を最小ラップした JS API を作成。

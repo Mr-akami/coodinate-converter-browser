@@ -44,7 +44,7 @@ static PJ* proj_get_op(const char* src, const char* dst) {
   return g_op;
 }
 
-int proj_init(const char* data_dir) {
+int pw_init(const char* data_dir) {
   if (g_ctx) {
     return 0;
   }
@@ -66,7 +66,7 @@ int proj_init(const char* data_dir) {
   return 0;
 }
 
-int proj_transform(const char* src, const char* dst, double* x, double* y, double* z) {
+int pw_transform(const char* src, const char* dst, double* x, double* y, double* z) {
   if (!x || !y) {
     return 2;
   }
@@ -91,7 +91,7 @@ int proj_transform(const char* src, const char* dst, double* x, double* y, doubl
   return 0;
 }
 
-void proj_clear_cache(void) {
+void pw_clear_cache(void) {
   if (g_op) {
     proj_destroy(g_op);
     g_op = NULL;
@@ -100,8 +100,8 @@ void proj_clear_cache(void) {
   g_dst[0] = '\0';
 }
 
-void proj_cleanup(void) {
-  proj_clear_cache();
+void pw_cleanup(void) {
+  pw_clear_cache();
   if (g_ctx) {
     proj_context_destroy(g_ctx);
     g_ctx = NULL;

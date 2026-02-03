@@ -21,6 +21,10 @@
           python3
           zstd
           unzip
+          curl
+          sqlite
+          gnused
+          gnutar
           nodejs
         ];
       };
