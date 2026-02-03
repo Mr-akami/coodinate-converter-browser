@@ -6,7 +6,7 @@
 ## 方針
 - Wasm ビルドは Emscripten を採用。
 - CLI は不要なのでライブラリ中心の構成にする。
-- `proj.db` を含む `proj-data` を OPFS に配置し、Wasm から検索パスを設定する。
+- `proj.db` を含む `proj-data` を OPFS にキャッシュし、起動時に MEMFS へコピーして Wasm から参照する。
 
 ## 前提
 - `emsdk`（Emscripten）、`cmake`、`ninja` などが利用可能。
@@ -24,74 +24,29 @@ git submodule add https://github.com/OSGeo/PROJ.git third_party/proj
 git submodule update --init --recursive
 ```
 
-## ビルド手順（案）
-1. CMake で静的ライブラリをビルド
-
+## ビルド手順
 ```sh
 ./scripts/build-proj-wasm.sh
 ```
 デフォルトで SQLite/zlib/libtiff を Wasm 用にビルドし、PROJ をリンク。
 必要に応じて `WITH_TIFF=0` で TIFF を無効化できます。
 
-## ラッパー設計（例）
-- `proj_init(data_dir)` で検索パスと DB パスを設定。
-- `proj_transform(src, dst, x, y, z)` のような最小 API を提供。
-- `proj_clear_cache()` / `proj_cleanup()` でキャッシュとコンテキストを破棄可能。
+## ラッパー設計
+C API は PROJ 本体との名前衝突を避けるため `pw_` プレフィックスを使用。
 
-```c
-// src/proj_wasm.c
-#include <proj.h>
+- `pw_init(data_dir)` で検索パスと DB パスを設定。
+- `pw_transform(src, dst, x, y, z)` で座標変換。
+- `pw_clear_cache()` / `pw_cleanup()` でキャッシュとコンテキストを破棄。
 
-static PJ_CONTEXT* ctx = NULL;
+## データフロー: OPFS キャッシュ + MEMFS
 
-int proj_init(const char* data_dir) {
-  if (ctx) return 0;
-  ctx = proj_context_create();
-  proj_context_set_search_paths(ctx, 1, &data_dir);
-
-  char db_path[1024];
-  snprintf(db_path, sizeof(db_path), "%s/proj.db", data_dir);
-  proj_context_set_database_path(ctx, db_path, NULL, NULL);
-  return 0;
-}
+```
+初回:  fetch(tar.gz) → Worker で OPFS に展開 → OPFS から MEMFS にコピー → pw_init
+2回目: OPFS キャッシュ済み（スキップ）   → OPFS から MEMFS にコピー → pw_init
 ```
 
-## OPFS マウント（例）
-```js
-await Module.FS.mkdir('/opfs');
-const backend = await Module.ccall(
-  'wasmfs_create_opfs_backend',
-  'number',
-  [],
-  [],
-  { async: true }
-);
-await Module.ccall(
-  'wasmfs_mount',
-  'number',
-  ['string', 'number'],
-  ['/opfs', backend],
-  { async: true }
-);
-// proj-data を /opfs/proj に展開した想定
-Module.ccall('pw_init', 'number', ['string'], ['/opfs/proj']);
-```
+Worker が OPFS に書いたファイルをメインスレッドで読み出し、`Module.FS.writeFile()` で MEMFS に書き込む。
 
-## proj-data 展開（Worker）
-`proj-data` は `.tar.gz` を前提にし、Worker で OPFS に展開する。
-
-```js
-import { ensureProjData } from './opfs/proj-data.js';
-
-await ensureProjData({
-  url: '/assets/proj-data.tar.gz',
-  version: '2025-02-01',
-  dirName: 'proj-data',
-  onProgress: (p) => console.log(p),
-});
-```
-
-## OPFS + Wasm 結線（サンプル）
 ```js
 import { initProjRuntime } from './proj-runtime.js';
 
@@ -99,56 +54,41 @@ const { Module } = await initProjRuntime({
   dataUrl: '/assets/proj-data.tar.gz',
   dataVersion: '2025-02-01',
   dataDirName: 'proj-data',
-  wasmUrl: '/assets/proj_wasm.wasm',
-});
-```
-
-OPFS を WasmFS から利用するため、Wasm ビルド時に `-sASYNCIFY=1` と `-lopfs.js` が必要。
-`_wasmfs_create_opfs_backend` / `_wasmfs_mount` を `EXPORTED_FUNCTIONS` に含める。
-もし `_wasmfs_create_opfs_backend` が `undefined` でも `Module.OPFS` が存在する場合は、
-`FS.mount(Module.OPFS, {}, '/opfs')` でマウントできるビルド構成がある。
-
-## スモークテスト
-`examples/smoke.html` を用意しているので、ローカルサーバで確認できる。
-
-```sh
-python -m http.server 5173
-```
-
-ブラウザで `http://localhost:5173/examples/smoke.html` を開いてログを確認。
-
-デバッグ用に `__projModule` が `window` に入る。必要なら以下を確認:
-```js
-typeof __projModule._wasmfs_create_opfs_backend
-typeof __projModule._wasmfs_mount
-```
-
-`_wasmfs_create_opfs_backend` が `undefined` のままなら、ブラウザが古い `proj_wasm.js` をキャッシュしている可能性がある。
-その場合は `initProjRuntime` に `moduleUrl` を渡してキャッシュを回避する。
-
-```js
-await initProjRuntime({
-  // ...
-  moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
+  wasmUrl: '/dist/proj_wasm.wasm',
 });
 ```
 
 ## proj-data パッケージ化
-`proj-data` ディレクトリ（`proj.db` があるルート）から `.tar.gz` を作成する。
-
 ```sh
+# nix develop 内では PROJ_LIB が自動設定される
+./scripts/package-proj-data.sh
+
+# 明示指定
 PROJ_DATA_DIR=/path/to/proj-data ./scripts/package-proj-data.sh
 ```
 
-Nix 環境では `PROJ_LIB` が設定されている場合があり、その場合は自動検出される。
-明示する場合は `PROJ_DATA_DIR` を指定する。
+出力: `assets/proj-data.tar.gz`
 
-`flake.nix` で `proj-data` を入れているので、`nix develop` 後は `PROJ_LIB` が自動設定される。
+## スモークテスト
+```sh
+python -m http.server 8765
+# http://localhost:8765/examples/smoke.html
+```
+
+## 過去のハマりポイント
+
+### 1. `proj_cleanup` シンボル衝突
+`proj_cleanup` は PROJ 本体（`malloc.cpp.o`）に定義済み。ラッパーで同名関数を定義するとリンク時に `duplicate symbol` エラーになる。
+→ ラッパー関数を `pw_` プレフィックスにリネームして解決。
+
+### 2. `_malloc` / `_free` 未エクスポート
+Emscripten の `EXPORTED_FUNCTIONS` に `_malloc` / `_free` を含めないと `Module._malloc` が `undefined` になる。`proj-api.js` が HEAPF64 経由で座標バッファを渡すために必要。
+
+### 3. WasmFS OPFS バックエンドと File System Access API の非互換
+WasmFS の OPFS バックエンドは独自のストレージ形式を使う。Worker が File System Access API (`getDirectoryHandle` / `getFileHandle`) で OPFS に書いたファイルは、WasmFS OPFS マウント経由では読めない。`FS.mount(Module.OPFS, {}, '/opfs')` は `unreachable` WASM trap を引き起こす。
+→ OPFS はキャッシュ層として維持し、Wasm には MEMFS 経由でデータを渡す方式に変更。OPFS から File System Access API でファイルを読み出し、`Module.FS.writeFile()` で MEMFS に書き込む。
 
 ## 注意点
 - `sqlite3` がビルドに必要。CMake 構成で不足する場合は、PROJ 側の SQLite ビルド設定を有効化する。
 - `proj-data` のサイズが大きいため、OPFS 展開は Worker で実行し、初回のみ行う。
-
-## 残タスク
-- PROJ の CMake オプションを精査し、必要機能とサイズのバランスを確認。
-- `proj-data` の配布形式（tar.zst / zip）決定。
+- `flake.nix` の `proj` パッケージで `PROJ_LIB` が自動設定される（`proj-data` は nixpkgs に存在しない）。

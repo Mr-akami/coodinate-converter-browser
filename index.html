@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Coordinate Converter</title>
+    <style>
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          "Courier New", monospace;
+        padding: 24px;
+        background: #0b0f14;
+        color: #cfd8e3;
+        max-width: 520px;
+        margin: 0 auto;
+      }
+      h1 { font-size: 1.2em; margin-bottom: 20px; }
+      label { display: block; margin-top: 12px; font-size: 0.85em; color: #8899aa; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        margin-top: 4px;
+        background: #101826;
+        color: #cfd8e3;
+        border: 1px solid #2a3545;
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 0.95em;
+      }
+      input:focus { outline: none; border-color: #4a8af4; }
+      .row {
+        display: flex;
+        gap: 12px;
+      }
+      .row > div { flex: 1; }
+      button {
+        margin-top: 16px;
+        width: 100%;
+        padding: 10px;
+        background: #4a8af4;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 0.95em;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.4; cursor: default; }
+      button:hover:not(:disabled) { background: #5a96ff; }
+      #result {
+        margin-top: 16px;
+        white-space: pre-wrap;
+        background: #101826;
+        padding: 16px;
+        border-radius: 8px;
+        min-height: 1.2em;
+      }
+      #status {
+        margin-top: 12px;
+        font-size: 0.85em;
+        color: #8899aa;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Coordinate Converter</h1>
+
+    <div class="row">
+      <div>
+        <label for="src">Source CRS</label>
+        <input id="src" value="EPSG:4326" />
+      </div>
+      <div>
+        <label for="dst">Destination CRS</label>
+        <input id="dst" value="EPSG:6677" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="lon">Longitude (x)</label>
+        <input id="lon" type="number" step="any" value="139.74" />
+      </div>
+      <div>
+        <label for="lat">Latitude (y)</label>
+        <input id="lat" type="number" step="any" value="35.71" />
+      </div>
+    </div>
+
+    <button id="btn" disabled>Transform</button>
+    <div id="status">Initializing PROJ runtime...</div>
+    <pre id="result"></pre>
+
+    <script type="module">
+      import { initProjRuntime } from './src/proj-runtime.js';
+      import { createProjApi } from './src/proj-api.js';
+
+      const btn = document.getElementById('btn');
+      const statusEl = document.getElementById('status');
+      const resultEl = document.getElementById('result');
+
+      let proj = null;
+
+      initProjRuntime({
+        dataUrl: '/assets/proj-data.tar.gz',
+        dataVersion: '2025-02-01',
+        dataDirName: 'proj-data',
+        wasmUrl: '/dist/proj_wasm.wasm',
+        moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
+        onProgress: (p) => {
+          if (p.stage === 'extract') {
+            statusEl.textContent = `Extracting... ${p.entries} entries`;
+          }
+        },
+      }).then(({ Module }) => {
+        proj = createProjApi(Module);
+        btn.disabled = false;
+        statusEl.textContent = 'Ready';
+      }).catch((err) => {
+        statusEl.textContent = `Init failed: ${err.message || err}`;
+      });
+
+      btn.addEventListener('click', () => {
+        const src = document.getElementById('src').value.trim();
+        const dst = document.getElementById('dst').value.trim();
+        const lon = parseFloat(document.getElementById('lon').value);
+        const lat = parseFloat(document.getElementById('lat').value);
+
+        if (!src || !dst || isNaN(lon) || isNaN(lat)) {
+          resultEl.textContent = 'Invalid input';
+          return;
+        }
+
+        try {
+          const r = proj.transform(src, dst, lon, lat, 0);
+          resultEl.textContent = `x: ${r.x}\ny: ${r.y}\nz: ${r.z}`;
+        } catch (e) {
+          resultEl.textContent = `Error: ${e.message || e}`;
+        }
+      });
+    </script>
+  </body>
+</html>

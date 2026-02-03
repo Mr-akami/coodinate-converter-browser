@@ -28,10 +28,7 @@ async function main() {
     },
   });
 
-  log(`wasmfs OPFS backend: ${typeof Module._wasmfs_create_opfs_backend}`);
-  log(`wasmfs mount: ${typeof Module._wasmfs_mount}`);
-  log(`Module.OPFS: ${Module.OPFS ? 'yes' : 'no'}`);
-  log(`OPFS data path: ${dataPath}`);
+  log(`Data path: ${dataPath}`);
 
   const proj = createProjApi(Module);
   const result = proj.transform('EPSG:4326', 'EPSG:3857', 139.6917, 35.6895, 0);
@@ -41,11 +38,4 @@ async function main() {
 
 main().catch((err) => {
   log(`Error: ${err && err.message ? err.message : String(err)}`);
-  const mod = globalThis.__projModule;
-  if (mod) {
-    log(`Debug _wasmfs_create_opfs_backend: ${typeof mod._wasmfs_create_opfs_backend}`);
-    log(`Debug _wasmfs_mount: ${typeof mod._wasmfs_mount}`);
-  } else {
-    log('Debug: __projModule not set');
-  }
 });
