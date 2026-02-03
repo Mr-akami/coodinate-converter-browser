@@ -25,8 +25,13 @@
           sqlite
           gnused
           gnutar
+          gzip
+          proj
           nodejs
         ];
+        shellHook = ''
+          export PROJ_LIB="${pkgs.proj}/share/proj"
+        '';
       };
     };
 }

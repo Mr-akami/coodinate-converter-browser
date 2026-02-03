@@ -59,9 +59,22 @@ int proj_init(const char* data_dir) {
 ## OPFS マウント（例）
 ```js
 await Module.FS.mkdir('/opfs');
-await Module.FS.mount(Module.FS.filesystems.OPFS, {}, '/opfs');
+const backend = await Module.ccall(
+  'wasmfs_create_opfs_backend',
+  'number',
+  [],
+  [],
+  { async: true }
+);
+await Module.ccall(
+  'wasmfs_mount',
+  'number',
+  ['string', 'number'],
+  ['/opfs', backend],
+  { async: true }
+);
 // proj-data を /opfs/proj に展開した想定
-Module.ccall('proj_init', 'number', ['string'], ['/opfs/proj']);
+Module.ccall('pw_init', 'number', ['string'], ['/opfs/proj']);
 ```
 
 ## proj-data 展開（Worker）
@@ -77,6 +90,60 @@ await ensureProjData({
   onProgress: (p) => console.log(p),
 });
 ```
+
+## OPFS + Wasm 結線（サンプル）
+```js
+import { initProjRuntime } from './proj-runtime.js';
+
+const { Module } = await initProjRuntime({
+  dataUrl: '/assets/proj-data.tar.gz',
+  dataVersion: '2025-02-01',
+  dataDirName: 'proj-data',
+  wasmUrl: '/assets/proj_wasm.wasm',
+});
+```
+
+OPFS を WasmFS から利用するため、Wasm ビルド時に `-sASYNCIFY=1` と `-lopfs.js` が必要。
+`_wasmfs_create_opfs_backend` / `_wasmfs_mount` を `EXPORTED_FUNCTIONS` に含める。
+もし `_wasmfs_create_opfs_backend` が `undefined` でも `Module.OPFS` が存在する場合は、
+`FS.mount(Module.OPFS, {}, '/opfs')` でマウントできるビルド構成がある。
+
+## スモークテスト
+`examples/smoke.html` を用意しているので、ローカルサーバで確認できる。
+
+```sh
+python -m http.server 5173
+```
+
+ブラウザで `http://localhost:5173/examples/smoke.html` を開いてログを確認。
+
+デバッグ用に `__projModule` が `window` に入る。必要なら以下を確認:
+```js
+typeof __projModule._wasmfs_create_opfs_backend
+typeof __projModule._wasmfs_mount
+```
+
+`_wasmfs_create_opfs_backend` が `undefined` のままなら、ブラウザが古い `proj_wasm.js` をキャッシュしている可能性がある。
+その場合は `initProjRuntime` に `moduleUrl` を渡してキャッシュを回避する。
+
+```js
+await initProjRuntime({
+  // ...
+  moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
+});
+```
+
+## proj-data パッケージ化
+`proj-data` ディレクトリ（`proj.db` があるルート）から `.tar.gz` を作成する。
+
+```sh
+PROJ_DATA_DIR=/path/to/proj-data ./scripts/package-proj-data.sh
+```
+
+Nix 環境では `PROJ_LIB` が設定されている場合があり、その場合は自動検出される。
+明示する場合は `PROJ_DATA_DIR` を指定する。
+
+`flake.nix` で `proj-data` を入れているので、`nix develop` 後は `PROJ_LIB` が自動設定される。
 
 ## 注意点
 - `sqlite3` がビルドに必要。CMake 構成で不足する場合は、PROJ 側の SQLite ビルド設定を有効化する。

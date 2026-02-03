@@ -206,11 +206,14 @@ emcc "${WRAPPER_SRC}" "${FINAL_LIBS[@]}" \
   -sMODULARIZE=1 \
   -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker \
+  -sASYNCIFY=1 \
   -sWASMFS=1 \
   -sFILESYSTEM=1 \
+  -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
-  -sEXPORTED_FUNCTIONS=_pw_init,_pw_transform,_pw_clear_cache,_pw_cleanup \
-  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS \
+  -sEXPORTED_FUNCTIONS='["_pw_init","_pw_transform","_pw_clear_cache","_pw_cleanup","_wasmfs_create_opfs_backend","_wasmfs_mount"]' \
+  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","HEAPF64"]' \
+  -lopfs.js \
   -o "${DIST_DIR}/proj_wasm.js"
 
 echo "Wasm bundle created at ${DIST_DIR}/proj_wasm.js"

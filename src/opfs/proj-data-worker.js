@@ -99,12 +99,17 @@ function isZeroBlock(buf) {
 function sanitizePath(path) {
   if (!path) return null;
   const cleaned = path.replace(/^\/+/, '');
-  const parts = cleaned.split('/').filter(Boolean);
+  const parts = cleaned
+    .split('/')
+    .filter(Boolean)
+    .filter((p) => p !== '.');
   if (parts.some((p) => p === '..')) return null;
+  if (parts.length === 0) return null;
   return parts.join('/');
 }
 
 async function ensureDir(root, path) {
+  if (!path || path === '.') return root;
   const parts = path.split('/');
   let dir = root;
   for (const part of parts) {

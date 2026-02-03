@@ -7,6 +7,7 @@ result-*
 # Build outputs
 build/
 dist/
+assets/proj-data*.tar.gz
 
 # Emscripten / wasm artifacts
 *.wasm
