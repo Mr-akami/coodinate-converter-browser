@@ -112,15 +112,15 @@
             statusEl.textContent = `Extracting... ${p.entries} entries`;
           }
         },
-      }).then(({ Module }) => {
-        proj = createProjApi(Module);
+      }).then(({ worker }) => {
+        proj = createProjApi(worker);
         btn.disabled = false;
         statusEl.textContent = 'Ready';
       }).catch((err) => {
         statusEl.textContent = `Init failed: ${err.message || err}`;
       });
 
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const src = document.getElementById('src').value.trim();
         const dst = document.getElementById('dst').value.trim();
         const lon = parseFloat(document.getElementById('lon').value);
@@ -132,7 +132,7 @@
         }
 
         try {
-          const r = proj.transform(src, dst, lon, lat, 0);
+          const r = await proj.transform(src, dst, lon, lat, 0);
           resultEl.textContent = `x: ${r.x}\ny: ${r.y}\nz: ${r.z}`;
         } catch (e) {
           resultEl.textContent = `Error: ${e.message || e}`;

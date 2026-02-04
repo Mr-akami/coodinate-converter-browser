@@ -1,27 +1,20 @@
 import { ensureProjData } from './opfs/proj-data.js';
 
-async function loadOpfsToMemfs(Module, dataDirName, memfsPath) {
-  const { FS } = Module;
-  if (!FS || typeof FS.mkdir !== 'function') {
-    throw new Error('FS is not available in this build');
-  }
-  try {
-    FS.mkdir(memfsPath);
-  } catch (err) {
-    if (!err || err.code !== 'EEXIST') {
-      throw err;
-    }
-  }
-
+async function collectOpfsFiles(dataDirName) {
   const root = await navigator.storage.getDirectory();
   const dataDir = await root.getDirectoryHandle(dataDirName, { create: false });
-
+  const files = [];
   for await (const [name, handle] of dataDir.entries()) {
+    if (handle.kind === 'directory') {
+      throw new Error(
+        `proj-data must be flat (no subdirectories). Found: ${name}/`
+      );
+    }
     if (handle.kind !== 'file') continue;
     const file = await handle.getFile();
-    const buf = new Uint8Array(await file.arrayBuffer());
-    FS.writeFile(`${memfsPath}/${name}`, buf);
+    files.push(file);
   }
+  return files;
 }
 
 export async function initProjRuntime({
@@ -32,15 +25,9 @@ export async function initProjRuntime({
   wasmUrl,
   moduleUrl,
   onProgress,
-  moduleFactory,
-  debug = false,
 } = {}) {
-  if (!dataUrl) {
-    throw new Error('dataUrl is required');
-  }
-  if (!dataVersion) {
-    throw new Error('dataVersion is required');
-  }
+  if (!dataUrl) throw new Error('dataUrl is required');
+  if (!dataVersion) throw new Error('dataVersion is required');
 
   await ensureProjData({
     url: dataUrl,
@@ -49,32 +36,44 @@ export async function initProjRuntime({
     onProgress,
   });
 
-  let createModule = moduleFactory;
-  if (!createModule) {
-    const url = moduleUrl
-      ? new URL(moduleUrl, import.meta.url).href
-      : new URL('../dist/proj_wasm.js', import.meta.url).href;
-    const mod = await import(url);
-    createModule = mod.default || mod;
-  }
+  const files = await collectOpfsFiles(dataDirName);
 
-  const Module = await createModule({
-    locateFile: (path) => {
-      if (wasmUrl && path.endsWith('.wasm')) return wasmUrl;
-      return path;
-    },
+  const workerUrl = new URL('./proj-worker.js', import.meta.url).href;
+  const worker = new Worker(workerUrl, { type: 'module' });
+
+  const resolvedModuleUrl = moduleUrl
+    ? new URL(moduleUrl, location.href).href
+    : new URL('../dist/proj_wasm.js', import.meta.url).href;
+  const resolvedWasmUrl = wasmUrl
+    ? new URL(wasmUrl, location.href).href
+    : undefined;
+
+  const msg = {
+    type: 'init',
+    memfsPath,
+    wasmUrl: resolvedWasmUrl,
+    moduleUrl: resolvedModuleUrl,
+    files,
+  };
+  await rpc(worker, msg);
+
+  return { worker };
+}
+
+let _nextId = 0;
+function rpc(worker, msg, transferables) {
+  return new Promise((resolve, reject) => {
+    const id = _nextId++;
+    const handler = (e) => {
+      if (e.data.id !== id) return;
+      worker.removeEventListener('message', handler);
+      if (e.data.type === 'error') {
+        reject(new Error(e.data.error));
+      } else {
+        resolve(e.data);
+      }
+    };
+    worker.addEventListener('message', handler);
+    worker.postMessage({ ...msg, id }, transferables || []);
   });
-
-  if (debug) {
-    globalThis.__projModule = Module;
-  }
-
-  await loadOpfsToMemfs(Module, dataDirName, memfsPath);
-
-  const rc = Module.ccall('pw_init', 'number', ['string'], [memfsPath]);
-  if (rc !== 0) {
-    throw new Error(`pw_init failed: ${rc}`);
-  }
-
-  return { Module, dataPath: memfsPath };
 }

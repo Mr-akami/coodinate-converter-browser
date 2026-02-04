@@ -13,13 +13,12 @@ function log(msg) {
 async function main() {
   log('Starting PROJ runtime...');
 
-  const { Module, dataPath } = await initProjRuntime({
+  const { worker } = await initProjRuntime({
     dataUrl: '/assets/proj-data.tar.gz',
     dataVersion: '2025-02-01',
     dataDirName: 'proj-data',
     wasmUrl: '/dist/proj_wasm.wasm',
     moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
-    debug: true,
     onProgress: (p) => {
       if (p.stage === 'extract') {
         const total = p.total ? `/${p.total}` : '';
@@ -28,10 +27,8 @@ async function main() {
     },
   });
 
-  log(`Data path: ${dataPath}`);
-
-  const proj = createProjApi(Module);
-  const result = proj.transform('EPSG:4326', 'EPSG:3857', 139.6917, 35.6895, 0);
+  const proj = createProjApi(worker);
+  const result = await proj.transform('EPSG:4326', 'EPSG:3857', 139.6917, 35.6895, 0);
 
   log(`Result: ${JSON.stringify(result)}`);
 }

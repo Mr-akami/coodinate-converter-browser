@@ -6,7 +6,7 @@
 ## 方針
 - Wasm ビルドは Emscripten を採用。
 - CLI は不要なのでライブラリ中心の構成にする。
-- `proj.db` を含む `proj-data` を OPFS にキャッシュし、起動時に MEMFS へコピーして Wasm から参照する。
+- `proj.db` を含む `proj-data` を OPFS にキャッシュし、起動時に WORKERFS でマウントして Wasm から参照する（コピーなし）。
 
 ## 前提
 - `emsdk`（Emscripten）、`cmake`、`ninja` などが利用可能。
@@ -38,14 +38,14 @@ C API は PROJ 本体との名前衝突を避けるため `pw_` プレフィッ�
 - `pw_transform(src, dst, x, y, z)` で座標変換。
 - `pw_clear_cache()` / `pw_cleanup()` でキャッシュとコンテキストを破棄。
 
-## データフロー: OPFS キャッシュ + MEMFS
+## データフロー: OPFS キャッシュ + WORKERFS
 
 ```
-初回:  fetch(tar.gz) → Worker で OPFS に展開 → OPFS から MEMFS にコピー → pw_init
-2回目: OPFS キャッシュ済み（スキップ）   → OPFS から MEMFS にコピー → pw_init
+初回:  fetch(tar.gz) → Worker で OPFS に展開 → File を収集 → WORKERFS マウント → pw_init
+2回目: OPFS キャッシュ済み（スキップ）   → File を収集 → WORKERFS マウント → pw_init
 ```
 
-Worker が OPFS に書いたファイルをメインスレッドで読み出し、`Module.FS.writeFile()` で MEMFS に書き込む。
+Worker が OPFS に書いたファイルをメインスレッドで `File` として読み出し、Worker 側で WORKERFS にマウントする。
 
 ```js
 import { initProjRuntime } from './proj-runtime.js';
@@ -86,9 +86,10 @@ Emscripten の `EXPORTED_FUNCTIONS` に `_malloc` / `_free` を含めないと `
 
 ### 3. WasmFS OPFS バックエンドと File System Access API の非互換
 WasmFS の OPFS バックエンドは独自のストレージ形式を使う。Worker が File System Access API (`getDirectoryHandle` / `getFileHandle`) で OPFS に書いたファイルは、WasmFS OPFS マウント経由では読めない。`FS.mount(Module.OPFS, {}, '/opfs')` は `unreachable` WASM trap を引き起こす。
-→ OPFS はキャッシュ層として維持し、Wasm には MEMFS 経由でデータを渡す方式に変更。OPFS から File System Access API でファイルを読み出し、`Module.FS.writeFile()` で MEMFS に書き込む。
+→ OPFS はキャッシュ層として維持し、Wasm は legacy FS + WORKERFS で `File` をマウントして参照する方式に変更。
 
 ## 注意点
 - `sqlite3` がビルドに必要。CMake 構成で不足する場合は、PROJ 側の SQLite ビルド設定を有効化する。
 - `proj-data` のサイズが大きいため、OPFS 展開は Worker で実行し、初回のみ行う。
+- `proj-data` はフラット構成のみ対応（サブディレクトリ不可）。
 - `flake.nix` の `proj` パッケージで `PROJ_LIB` が自動設定される（`proj-data` は nixpkgs に存在しない）。
