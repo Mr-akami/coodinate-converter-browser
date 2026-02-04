@@ -156,7 +156,10 @@ if [[ "${WITH_TIFF}" == "1" ]]; then
       -Dzstd=OFF \
       -Dwebp=OFF \
       -Djbig=OFF \
-      -DCMAKE_PREFIX_PATH="${DEPS_INSTALL_DIR}"
+      -DHAVE_MMAP:BOOL=OFF \
+      -DCMAKE_PREFIX_PATH="${DEPS_INSTALL_DIR}" \
+      -DZLIB_INCLUDE_DIR="${DEPS_INSTALL_DIR}/include" \
+      -DZLIB_LIBRARY="${ZLIB_LIB}"
     cmake --build build_wasm -j
     cmake --install build_wasm
     popd >/dev/null
@@ -165,11 +168,14 @@ fi
 
 PROJ_CMAKE_ARGS=(
   -DCMAKE_BUILD_TYPE=Release
+  -DCMAKE_CXX_FLAGS="-fexceptions"
+  -DCMAKE_C_FLAGS="-fexceptions"
   -DBUILD_SHARED_LIBS=OFF
   -DBUILD_TESTING=OFF
   -DBUILD_APPS=OFF
   -DENABLE_CURL=OFF
   -DENABLE_TIFF=$( [[ "${WITH_TIFF}" == "1" ]] && echo ON || echo OFF )
+  -DEMBED_RESOURCE_FILES=OFF
   -DEXE_SQLITE3="${EXE_SQLITE3}"
   -DSQLite3_INCLUDE_DIR="${DEPS_INSTALL_DIR}/include"
   -DSQLite3_LIBRARY="${SQLITE_LIB}"
@@ -201,17 +207,20 @@ fi
 
 emcc "${WRAPPER_SRC}" "${FINAL_LIBS[@]}" \
   -O3 \
+  -fexceptions \
   -I "${BUILD_DIR}/src" \
   -I "${PROJ_DIR}/src" \
+  -I "${DEPS_INSTALL_DIR}/include" \
   -sMODULARIZE=1 \
   -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker \
   -sASYNCIFY=1 \
+  -sDISABLE_EXCEPTION_CATCHING=0 \
   -sFILESYSTEM=1 \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sEXPORTED_FUNCTIONS='["_pw_init","_pw_transform","_pw_clear_cache","_pw_cleanup","_malloc","_free"]' \
-  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","HEAPF64","WORKERFS"]' \
+  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","HEAPF64"]' \
   -lworkerfs.js \
   -o "${DIST_DIR}/proj_wasm.js"
 

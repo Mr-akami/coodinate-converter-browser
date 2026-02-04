@@ -68,7 +68,6 @@
       }
       .badge-ok { background: #1a3a2a; color: #4ade80; }
       .badge-ng { background: #3a1a1a; color: #f87171; }
-      .badge-wait { background: #2a2a1a; color: #fbbf24; }
       #checks {
         margin-top: 16px;
         background: #101826;
@@ -199,12 +198,6 @@
         dataVersion: '2026-02-04',
         dataDirName: 'proj-data',
         wasmUrl: '/dist/proj_wasm.wasm',
-        moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
-        onProgress: (p) => {
-          if (p.stage === 'extract') {
-            statusEl.textContent = `Extracting... ${p.entries} entries`;
-          }
-        },
       }).then(async ({ worker }) => {
         proj = createProjApi(worker);
         btn.disabled = false;
@@ -247,12 +240,13 @@
           detail: c2 ? `(${c2.x.toFixed(8)}, ${c2.y.toFixed(8)})` : '',
         });
 
-        // 3. Geoid model (gsigeo2011)
+        // 3. Geoid model (gsigeo2011) via CRS-to-CRS
         const c3 = await tryTransform('EPSG:6667', 'EPSG:6697', 139.7671, 35.6812, 76.0);
+        const geoidOk = c3 !== null && Math.abs(c3.z - 76.0) > 0.1;
         checks.push({
           label: 'ジオイドモデル (GSIGEO2011)',
-          ok: c3 !== null && Math.abs(c3.z - 76.0) > 0.1,
-          detail: c3 ? `楕円体高76.0m → 標高${c3.z.toFixed(3)}m` : '',
+          ok: geoidOk,
+          detail: c3 ? `z=${c3.z.toFixed(3)}` : 'transform failed',
         });
 
         // 4. Tokyo datum → JGD2011

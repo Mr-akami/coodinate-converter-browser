@@ -1,18 +1,20 @@
 // PROJ WASM Worker
-// Receives File objects from main thread, mounts WORKERFS, runs WASM transforms.
+// Receives File objects from main thread, writes to MEMFS, runs WASM transforms.
 
 let Module = null;
 
-function mountWorkerFs(FS, WORKERFS, mountPath, files) {
-  if (!WORKERFS) {
-    throw new Error('WORKERFS not available. Build with -lworkerfs.js.');
-  }
+async function writeFilesToMemfs(FS, mountPath, files) {
   try {
     FS.mkdir(mountPath);
   } catch (err) {
     if (!err || err.code !== 'EEXIST') throw err;
   }
-  FS.mount(WORKERFS, { files }, mountPath);
+
+  for (const file of files) {
+    const ab = await file.arrayBuffer();
+    const data = new Uint8Array(ab);
+    FS.writeFile(`${mountPath}/${file.name}`, data);
+  }
 }
 
 async function handleInit(msg) {
@@ -29,7 +31,7 @@ async function handleInit(msg) {
     },
   });
 
-  mountWorkerFs(Module.FS, Module.WORKERFS, memfsPath, files);
+  await writeFilesToMemfs(Module.FS, memfsPath, files);
 
   const rc = Module.ccall('pw_init', 'number', ['string'], [memfsPath]);
   if (rc !== 0) throw new Error(`pw_init failed: ${rc}`);
@@ -77,6 +79,9 @@ self.addEventListener('message', async (e) => {
       throw new Error(`unknown message type: ${type}`);
     }
   } catch (err) {
-    self.postMessage({ type: 'error', id, error: err.message || String(err) });
+    const msg = (typeof err === 'object' && err !== null)
+      ? (err.message || err.stack || JSON.stringify(err))
+      : String(err);
+    self.postMessage({ type: 'error', id, error: msg });
   }
 });
