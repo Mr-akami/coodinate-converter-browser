@@ -2,7 +2,7 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <title>Coordinate Converter</title>
+    <title>PROJ JGD2025 / sc-proj-data 検証</title>
     <style>
       body {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
@@ -10,12 +10,13 @@
         padding: 24px;
         background: #0b0f14;
         color: #cfd8e3;
-        max-width: 520px;
+        max-width: 600px;
         margin: 0 auto;
       }
-      h1 { font-size: 1.2em; margin-bottom: 20px; }
+      h1 { font-size: 1.2em; margin-bottom: 4px; }
+      .subtitle { font-size: 0.8em; color: #8899aa; margin-bottom: 20px; }
       label { display: block; margin-top: 12px; font-size: 0.85em; color: #8899aa; }
-      input {
+      input, select {
         width: 100%;
         box-sizing: border-box;
         padding: 8px 10px;
@@ -27,11 +28,8 @@
         font-family: inherit;
         font-size: 0.95em;
       }
-      input:focus { outline: none; border-color: #4a8af4; }
-      .row {
-        display: flex;
-        gap: 12px;
-      }
+      input:focus, select:focus { outline: none; border-color: #4a8af4; }
+      .row { display: flex; gap: 12px; }
       .row > div { flex: 1; }
       button {
         margin-top: 16px;
@@ -54,16 +52,58 @@
         padding: 16px;
         border-radius: 8px;
         min-height: 1.2em;
+        font-size: 0.9em;
       }
       #status {
         margin-top: 12px;
         font-size: 0.85em;
         color: #8899aa;
       }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.75em;
+        margin-left: 6px;
+      }
+      .badge-ok { background: #1a3a2a; color: #4ade80; }
+      .badge-ng { background: #3a1a1a; color: #f87171; }
+      .badge-wait { background: #2a2a1a; color: #fbbf24; }
+      #checks {
+        margin-top: 16px;
+        background: #101826;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 0.85em;
+        line-height: 2;
+      }
+      .section-label {
+        font-size: 0.8em;
+        color: #5a6a7a;
+        margin-top: 16px;
+        margin-bottom: 2px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
     </style>
   </head>
   <body>
-    <h1>Coordinate Converter</h1>
+    <h1>PROJ sc-proj-data 検証</h1>
+    <div class="subtitle">JGD2025 / JPGEO2024 対応確認</div>
+
+    <div id="checks">Loading...</div>
+
+    <div class="section-label">変換テスト</div>
+
+    <label for="preset">プリセット</label>
+    <select id="preset">
+      <option value="">-- カスタム --</option>
+      <option value="wgs84_to_jgd2011_9" selected>WGS84 → JGD2011 平面直角IX系 (東京)</option>
+      <option value="jgd2000_to_jgd2011">JGD2000 → JGD2011 (グリッド変換)</option>
+      <option value="jgd2011_to_wgs84">JGD2011 → WGS84</option>
+      <option value="jgd2011_geoid">JGD2011楕円体高 → 標高 (ジオイド)</option>
+      <option value="tokyo_to_jgd2011">旧日本測地系 → JGD2011</option>
+    </select>
 
     <div class="row">
       <div>
@@ -78,12 +118,16 @@
 
     <div class="row">
       <div>
-        <label for="lon">Longitude (x)</label>
-        <input id="lon" type="number" step="any" value="139.74" />
+        <label for="lon">経度 / X</label>
+        <input id="lon" type="number" step="any" value="139.7671" />
       </div>
       <div>
-        <label for="lat">Latitude (y)</label>
-        <input id="lat" type="number" step="any" value="35.71" />
+        <label for="lat">緯度 / Y</label>
+        <input id="lat" type="number" step="any" value="35.6812" />
+      </div>
+      <div>
+        <label for="h">高さ / Z</label>
+        <input id="h" type="number" step="any" value="0" />
       </div>
     </div>
 
@@ -98,12 +142,61 @@
       const btn = document.getElementById('btn');
       const statusEl = document.getElementById('status');
       const resultEl = document.getElementById('result');
+      const checksEl = document.getElementById('checks');
+      const presetEl = document.getElementById('preset');
+      const srcEl = document.getElementById('src');
+      const dstEl = document.getElementById('dst');
+      const lonEl = document.getElementById('lon');
+      const latEl = document.getElementById('lat');
+      const hEl = document.getElementById('h');
+
+      const PRESETS = {
+        wgs84_to_jgd2011_9: {
+          src: 'EPSG:4326', dst: 'EPSG:6677',
+          lon: 139.7671, lat: 35.6812, h: 0,
+          desc: 'WGS84 → JGD2011 平面直角IX系 (東京駅付近)',
+        },
+        jgd2000_to_jgd2011: {
+          src: 'EPSG:4612', dst: 'EPSG:6668',
+          lon: 139.7671, lat: 35.6812, h: 0,
+          desc: 'JGD2000→JGD2011 (要グリッド: touhokutaiheiyouoki2011.gsb)',
+        },
+        jgd2011_to_wgs84: {
+          src: 'EPSG:6668', dst: 'EPSG:4326',
+          lon: 139.7671, lat: 35.6812, h: 0,
+          desc: 'JGD2011 → WGS84',
+        },
+        jgd2011_geoid: {
+          src: 'EPSG:6667', dst: 'EPSG:6697',
+          lon: 139.7671, lat: 35.6812, h: 76.0,
+          desc: 'JGD2011楕円体高 → JGD2011+標高 (要ジオイドグリッド)',
+        },
+        tokyo_to_jgd2011: {
+          src: 'EPSG:4301', dst: 'EPSG:6668',
+          lon: 139.7671, lat: 35.6812, h: 0,
+          desc: '旧日本測地系(Tokyo) → JGD2011 (要グリッド)',
+        },
+      };
 
       let proj = null;
 
+      presetEl.addEventListener('change', () => {
+        const p = PRESETS[presetEl.value];
+        if (!p) return;
+        srcEl.value = p.src;
+        dstEl.value = p.dst;
+        lonEl.value = p.lon;
+        latEl.value = p.lat;
+        hEl.value = p.h;
+        resultEl.textContent = '';
+      });
+
+      // Apply default preset on load
+      presetEl.dispatchEvent(new Event('change'));
+
       initProjRuntime({
         dataUrl: '/assets/proj-data.tar.gz',
-        dataVersion: '2025-02-01',
+        dataVersion: '2026-02-04',
         dataDirName: 'proj-data',
         wasmUrl: '/dist/proj_wasm.wasm',
         moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
@@ -112,30 +205,103 @@
             statusEl.textContent = `Extracting... ${p.entries} entries`;
           }
         },
-      }).then(({ worker }) => {
+      }).then(async ({ worker }) => {
         proj = createProjApi(worker);
         btn.disabled = false;
         statusEl.textContent = 'Ready';
+        await runChecks();
       }).catch((err) => {
         statusEl.textContent = `Init failed: ${err.message || err}`;
+        checksEl.innerHTML = `<span class="badge badge-ng">Init Error</span>`;
       });
 
+      async function tryTransform(src, dst, x, y, z) {
+        try {
+          const r = await proj.transform(src, dst, x, y, z);
+          if (isNaN(r.x) || r.x === Infinity) return null;
+          return r;
+        } catch {
+          return null;
+        }
+      }
+
+      async function runChecks() {
+        checksEl.innerHTML = 'Checking...';
+        const checks = [];
+
+        // 1. JGD2011 basic
+        const c1 = await tryTransform('EPSG:4326', 'EPSG:6677', 139.7671, 35.6812, 0);
+        checks.push({
+          label: 'JGD2011 平面直角IX系',
+          ok: c1 !== null,
+          detail: c1 ? `(${c1.x.toFixed(3)}, ${c1.y.toFixed(3)})` : '',
+        });
+
+        // 2. JGD2000 → JGD2011 (grid-based)
+        const c2 = await tryTransform('EPSG:4612', 'EPSG:6668', 139.7671, 35.6812, 0);
+        const hasGrid = c2 !== null &&
+          Math.abs(c2.x - 139.7671) < 0.01 && Math.abs(c2.y - 35.6812) < 0.01;
+        checks.push({
+          label: 'JGD2000→JGD2011 グリッド変換',
+          ok: hasGrid,
+          detail: c2 ? `(${c2.x.toFixed(8)}, ${c2.y.toFixed(8)})` : '',
+        });
+
+        // 3. Geoid model (gsigeo2011)
+        const c3 = await tryTransform('EPSG:6667', 'EPSG:6697', 139.7671, 35.6812, 76.0);
+        checks.push({
+          label: 'ジオイドモデル (GSIGEO2011)',
+          ok: c3 !== null && Math.abs(c3.z - 76.0) > 0.1,
+          detail: c3 ? `楕円体高76.0m → 標高${c3.z.toFixed(3)}m` : '',
+        });
+
+        // 4. Tokyo datum → JGD2011
+        const c4 = await tryTransform('EPSG:4301', 'EPSG:6668', 139.7671, 35.6812, 0);
+        checks.push({
+          label: '旧日本測地系→JGD2011',
+          ok: c4 !== null,
+          detail: c4 ? `(${c4.x.toFixed(8)}, ${c4.y.toFixed(8)})` : '',
+        });
+
+        // Render
+        checksEl.innerHTML = checks.map((c) => {
+          const badge = c.ok
+            ? `<span class="badge badge-ok">OK</span>`
+            : `<span class="badge badge-ng">NG</span>`;
+          const detail = c.detail ? ` <span style="color:#5a6a7a">${c.detail}</span>` : '';
+          return `${c.label} ${badge}${detail}`;
+        }).join('<br>');
+      }
+
       btn.addEventListener('click', async () => {
-        const src = document.getElementById('src').value.trim();
-        const dst = document.getElementById('dst').value.trim();
-        const lon = parseFloat(document.getElementById('lon').value);
-        const lat = parseFloat(document.getElementById('lat').value);
+        const src = srcEl.value.trim();
+        const dst = dstEl.value.trim();
+        const lon = parseFloat(lonEl.value);
+        const lat = parseFloat(latEl.value);
+        const h = parseFloat(hEl.value) || 0;
 
         if (!src || !dst || isNaN(lon) || isNaN(lat)) {
           resultEl.textContent = 'Invalid input';
           return;
         }
 
+        btn.disabled = true;
+        const preset = PRESETS[presetEl.value];
+        const label = preset ? preset.desc : `${src} → ${dst}`;
+
         try {
-          const r = await proj.transform(src, dst, lon, lat, 0);
-          resultEl.textContent = `x: ${r.x}\ny: ${r.y}\nz: ${r.z}`;
+          const r = await proj.transform(src, dst, lon, lat, h);
+          resultEl.textContent =
+            `${label}\n` +
+            `─────────────────────────────\n` +
+            `入力: (${lon}, ${lat}, ${h})\n` +
+            `結果: x=${r.x}\n` +
+            `      y=${r.y}\n` +
+            `      z=${r.z}`;
         } catch (e) {
           resultEl.textContent = `Error: ${e.message || e}`;
+        } finally {
+          btn.disabled = false;
         }
       });
     </script>

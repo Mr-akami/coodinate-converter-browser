@@ -15,7 +15,7 @@ async function main() {
 
   const { worker } = await initProjRuntime({
     dataUrl: '/assets/proj-data.tar.gz',
-    dataVersion: '2025-02-01',
+    dataVersion: '2026-02-04',
     dataDirName: 'proj-data',
     wasmUrl: '/dist/proj_wasm.wasm',
     moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
