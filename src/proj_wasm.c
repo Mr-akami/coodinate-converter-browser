@@ -20,9 +20,21 @@ static int crs_has_vertical(const char* crs_str) {
   if (!crs) return 0;
 
   PJ_TYPE t = proj_get_type(crs);
-  int vert = (t == PJ_TYPE_GEOGRAPHIC_3D_CRS || t == PJ_TYPE_COMPOUND_CRS);
+  int vert = (t == PJ_TYPE_GEOGRAPHIC_3D_CRS || t == PJ_TYPE_COMPOUND_CRS ||
+              t == PJ_TYPE_VERTICAL_CRS);
   proj_destroy(crs);
   return vert;
+}
+
+/* Check if a CRS is a vertical-only CRS. */
+static int crs_is_vertical(const char* crs_str) {
+  PJ* crs = proj_create(g_ctx, crs_str);
+  if (!crs) return 0;
+
+  PJ_TYPE t = proj_get_type(crs);
+  int is_vertical = (t == PJ_TYPE_VERTICAL_CRS);
+  proj_destroy(crs);
+  return is_vertical;
 }
 
 /* Check if a CRS expects lat,lon (or lat,lon,h) axis order. */
@@ -82,6 +94,9 @@ static PJ* proj_get_op(const char* src, const char* dst) {
     g_op = op;
     g_swap_in = crs_is_latlon(src);
     g_swap_out = crs_is_latlon(dst);
+    if (!g_swap_out && crs_is_vertical(dst)) {
+      g_swap_out = g_swap_in;
+    }
   } else {
     PJ* normalized = proj_normalize_for_visualization(g_ctx, op);
     proj_destroy(op);
