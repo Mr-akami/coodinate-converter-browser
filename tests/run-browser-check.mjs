@@ -57,22 +57,22 @@ async function run() {
     await page.goto(serverUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const status = document.getElementById('status');
-      return status && status.textContent === 'Done.';
+      const text = status?.textContent || '';
+      return text.startsWith('Done.') && text.includes('passed');
     }, { timeout: 180000 });
 
-    const summary = await page.textContent('#summary');
-    const summaryText = (summary || '').trim();
-    console.log(`Summary: ${summaryText}`);
+    const statusText = (await page.textContent('#status') || '').trim();
+    console.log(`Summary: ${statusText}`);
 
-    if (!summaryText.endsWith('passed')) {
-      throw new Error(`Unexpected summary: ${summaryText}`);
+    const match = statusText.match(/Done\.\s+(\d+)\/(\d+)\s+passed/);
+    if (!match) {
+      throw new Error(`Unexpected summary: ${statusText}`);
     }
 
-    const [passedStr, totalStr] = summaryText.replace(' passed', '').split('/');
-    const passed = Number(passedStr);
-    const total = Number(totalStr);
+    const passed = Number(match[1]);
+    const total = Number(match[2]);
     if (Number.isNaN(passed) || Number.isNaN(total)) {
-      throw new Error(`Unable to parse summary: ${summaryText}`);
+      throw new Error(`Unable to parse summary: ${statusText}`);
     }
 
     if (passed !== total) {
@@ -81,7 +81,7 @@ async function run() {
       );
       console.error('Failures:');
       failures.forEach((line) => console.error(`- ${line}`));
-      throw new Error(`Browser comparison failed: ${summaryText}`);
+      throw new Error(`Browser comparison failed: ${statusText}`);
     }
 
     await context.close();

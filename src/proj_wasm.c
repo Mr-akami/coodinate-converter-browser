@@ -9,6 +9,22 @@ static char g_dst[256];
 static int g_swap_in = 0;
 static int g_swap_out = 0;
 
+static PJ* crs_get_horizontal_2d(PJ* crs) {
+  if (!crs) return NULL;
+
+  PJ_TYPE t = proj_get_type(crs);
+  switch (t) {
+    case PJ_TYPE_COMPOUND_CRS:
+      return proj_crs_get_sub_crs(g_ctx, crs, 0);
+    case PJ_TYPE_GEOGRAPHIC_3D_CRS:
+      return proj_crs_demote_to_2D(g_ctx, NULL, crs);
+    case PJ_TYPE_VERTICAL_CRS:
+      return NULL;
+    default:
+      return proj_clone(g_ctx, crs);
+  }
+}
+
 /*
  * Check if a CRS has a vertical component (3D geographic or compound).
  * When either source or target has vertical, we must skip
@@ -37,35 +53,38 @@ static int crs_is_vertical(const char* crs_str) {
   return is_vertical;
 }
 
-/* Check if a CRS expects lat,lon (or lat,lon,h) axis order. */
-static int crs_is_latlon(const char* crs_str) {
+/* Check if a CRS axis order is north,east (lat/ northing first). */
+static int crs_is_north_east(const char* crs_str) {
   PJ* crs = proj_create(g_ctx, crs_str);
   if (!crs) return 0;
 
-  PJ_TYPE t = proj_get_type(crs);
-  int latlon = 0;
+  int swap = 0;
+  PJ* target = crs;
+  PJ* horiz = NULL;
 
-  switch (t) {
-    case PJ_TYPE_GEOGRAPHIC_2D_CRS:
-    case PJ_TYPE_GEOGRAPHIC_3D_CRS:
-      latlon = 1;
-      break;
-    case PJ_TYPE_COMPOUND_CRS: {
-      PJ* horiz = proj_crs_get_sub_crs(g_ctx, crs, 0);
-      if (horiz) {
-        PJ_TYPE ht = proj_get_type(horiz);
-        if (ht == PJ_TYPE_GEOGRAPHIC_2D_CRS || ht == PJ_TYPE_GEOGRAPHIC_3D_CRS)
-          latlon = 1;
-        proj_destroy(horiz);
-      }
-      break;
-    }
-    default:
-      break;
+  if (proj_get_type(crs) == PJ_TYPE_COMPOUND_CRS) {
+    horiz = proj_crs_get_sub_crs(g_ctx, crs, 0);
+    if (horiz) target = horiz;
   }
 
+  PJ* cs = proj_crs_get_coordinate_system(g_ctx, target);
+  if (cs) {
+    const char* dir0 = NULL;
+    const char* dir1 = NULL;
+    if (proj_cs_get_axis_count(g_ctx, cs) >= 2 &&
+        proj_cs_get_axis_info(g_ctx, cs, 0, NULL, NULL, &dir0, NULL, NULL, NULL, NULL) &&
+        proj_cs_get_axis_info(g_ctx, cs, 1, NULL, NULL, &dir1, NULL, NULL, NULL, NULL) &&
+        dir0 && dir1 &&
+        strcmp(dir0, "north") == 0 &&
+        strcmp(dir1, "east") == 0) {
+      swap = 1;
+    }
+    proj_destroy(cs);
+  }
+
+  if (horiz) proj_destroy(horiz);
   proj_destroy(crs);
-  return latlon;
+  return swap;
 }
 
 static PJ* proj_get_op(const char* src, const char* dst) {
@@ -85,19 +104,50 @@ static PJ* proj_get_op(const char* src, const char* dst) {
 
   if (!src || !dst) return NULL;
 
-  PJ* op = proj_create_crs_to_crs(g_ctx, src, dst, NULL);
-  if (!op) return NULL;
-
   int has_vert = crs_has_vertical(src) || crs_has_vertical(dst);
+  PJ* op = NULL;
 
   if (has_vert) {
-    g_op = op;
-    g_swap_in = crs_is_latlon(src);
-    g_swap_out = crs_is_latlon(dst);
+    PJ* src_crs = proj_create(g_ctx, src);
+    PJ* dst_crs = proj_create(g_ctx, dst);
+    if (!src_crs || !dst_crs) {
+      if (src_crs) proj_destroy(src_crs);
+      if (dst_crs) proj_destroy(dst_crs);
+      return NULL;
+    }
+
+    PJ* src_for_op = src_crs;
+    PJ* src_compound = NULL;
+    if (proj_get_type(src_crs) == PJ_TYPE_VERTICAL_CRS &&
+        proj_get_type(dst_crs) != PJ_TYPE_VERTICAL_CRS) {
+      PJ* horiz = crs_get_horizontal_2d(dst_crs);
+      if (horiz) {
+        src_compound = proj_create_compound_crs(g_ctx, "src+vert", horiz, src_crs);
+        proj_destroy(horiz);
+        if (src_compound) src_for_op = src_compound;
+      }
+    }
+
+    op = proj_create_crs_to_crs_from_pj(g_ctx, src_for_op, dst_crs, NULL, NULL);
+
+    g_swap_in = crs_is_north_east(src);
+    g_swap_out = crs_is_north_east(dst);
+    if (proj_get_type(src_crs) == PJ_TYPE_VERTICAL_CRS &&
+        proj_get_type(dst_crs) != PJ_TYPE_VERTICAL_CRS) {
+      g_swap_in = crs_is_north_east(dst);
+    }
     if (!g_swap_out && crs_is_vertical(dst)) {
       g_swap_out = g_swap_in;
     }
+
+    if (src_compound) proj_destroy(src_compound);
+    proj_destroy(src_crs);
+    proj_destroy(dst_crs);
+    if (!op) return NULL;
+    g_op = op;
   } else {
+    op = proj_create_crs_to_crs(g_ctx, src, dst, NULL);
+    if (!op) return NULL;
     PJ* normalized = proj_normalize_for_visualization(g_ctx, op);
     proj_destroy(op);
     if (!normalized) return NULL;

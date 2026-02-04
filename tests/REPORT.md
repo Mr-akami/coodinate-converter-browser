@@ -89,3 +89,62 @@ CZM:JGD2024 = VERTCRS (同上)
 再テスト手順:
 - `nix develop -c scripts/build-proj-wasm.sh`
 - `npm run test:browser`（Playwright headless で `tests/comparison.html` を実行）
+
+---
+
+# 拡張テストスイート結果（修正前）
+
+果サマリ: **102/108 passed + 18 robustness cases**
+
+## 1. CSV Comparison: 77/79 passed
+
+FAIL (2件) — **EPSG:4979 → EPSG:6677 (WGS84 3D → 平面直角IX系, Z=50/3776)**
+
+前回修正と同種の軸順バグ。`crs_has_vertical(EPSG:4979)=1` で normalize をスキップ → dst の EPSG:6677 (projected) も `crs_is_latlon()=0` → 出力の northing,easting が swap されない。
+
+修正方針: **dst が projected CRS の場合にも、normalize スキップ時は出力を swap する必要がある**（projected CRS の EPSG 軸順は northing,easting）。
+
+## 2. Round-trip: 16/19 passed
+
+| 結果 | ケース | 原因 |
+|---|---|---|
+| FAIL | Tokyo↔JGD2011 (4301↔6668) | dx=1.86e-8、閾値 1e-8 をわずかに超過。Ballpark 変換(Helmert 7パラメータ)の浮動小数点丸めが原因。閾値を 5e-8 に緩和するか、既知の制約として許容 |
+| ERR | JPGEO2024 RT (6667↔6695) | 逆変換 6695→6667 でエラー。vertical 単体 CRS → 3D geographic CRS の逆変換が PROJ で未サポートの可能性 |
+| ERR | JGD2024 RT (4979↔CZM:JGD2024) | 同上。CZM:JGD2024 → 4979 の逆変換が失敗 |
+
+## 3. Axis-order: 9/10 passed
+
+WARN (1件): Geoid SWAPPED (6667→6697) — swapped な入力(lat=139.77)でもエラーにならず結果が返る。ジオイド変換は水平座標をそのまま返すため、緯度 139° でも PROJ は reject しない。これは PROJ の仕様上の挙動で WASM のバグではない。
+
+## 4. Robustness: 18 cases (判定なし、挙動記録)
+
+- lat>90, lon>180, NaN: pw_transform failed: 4 でエラー → 正しくリジェクト
+- Infinity: NaN/Inf 返却
+- 日本域外 (London, NY, Sydney, 原点): 値は返るが巨大な座標値。PROJ は Plane Rectangular を全球で計算可能（TM投影の数学的性質）
+- 無効CRS: pw_transform failed: 3 でエラー → 正しくリジェクト
+- 負のZ, 大きなZ: 正常動作、Zはパススルー
+
+## 新規発見バグまとめ
+
+1. **EPSG:4979 → projected CRS 軸順バグ** — src が 3D geographic のとき normalize スキップされるが、dst が projected でも swap しない
+2. **Vertical CRS 逆変換不可** — EPSG:6695→EPSG:6667, CZM:JGD2024→EPSG:4979 の逆方向が動かない
+
+# 修正内容（拡張テストスイート）
+
+1. **projected CRS の軸順判定を north/east で行う**
+   - `crs_is_latlon()` を置き換え、`proj_crs_get_coordinate_system` + `proj_cs_get_axis_info` で **axis[0]=north, axis[1]=east** を検出して swap 判定。
+   - normalize スキップ時でも projected CRS の northing/easting を正しく lon/east, lat/north に戻す。
+2. **Vertical→Geographic の逆変換を可能にする**
+   - src が vertical 単体で dst が horizontal を持つ場合、**dst の水平 CRS を src 側に合成した COMPOUND CRS** を生成して `proj_create_crs_to_crs_from_pj` に渡す。
+   - これに合わせて **src が vertical のときは dst の軸順を `g_swap_in` に反映**。
+
+対象ファイル: `src/proj_wasm.c`
+
+# テスト結果（修正後・期待）
+
+未再計測。上記修正により以下の改善が期待される:
+
+- CSV Comparison: **79/79 PASS**（EPSG:4979→EPSG:6677 の swap ずれ解消）
+- Round-trip: **18/19 PASS**（vertical 逆変換が通る前提。Tokyo↔JGD2011 のみ閾値超過）
+- Axis-order: **9/10 PASS**（Geoid SWAPPED は仕様）
+- Total: **106/108 PASS + 18 robustness cases**

@@ -12,7 +12,8 @@ const TOL = {
 };
 
 function isGeographic(crs) {
-  return /^EPSG:(4326|4612|4301|4979|6667|6668|6695|6697)$/.test(crs)
+  // Geographic, 3D geographic, compound with geographic horizontal, vertical-only
+  return /^EPSG:(4258|4267|4269|4271|4272|4273|4275|4277|4283|4289|4312|4313|4314|4326|4612|4617|4150|4167|4171|4979|5773|6318|6319|6667|6668|6695|6697|7844)$/.test(crs)
     || /CZM:/.test(crs);
 }
 
@@ -104,36 +105,58 @@ function renderCsvTable(results) {
 // ── Round-trip tests ─────────────────────────────────────────────────────────
 
 const ROUNDTRIP_CASES = [
-  // WGS84 → Plane Rectangular → WGS84
-  { label: 'Tokyo WGS84↔IX',     a: 'EPSG:4326', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 0 },
-  { label: 'Osaka WGS84↔VI',     a: 'EPSG:4326', b: 'EPSG:6674', x: 135.5023, y: 34.6937, z: 0 },
-  { label: 'Sapporo WGS84↔XII',  a: 'EPSG:4326', b: 'EPSG:6680', x: 141.3469, y: 43.0621, z: 0 },
-  { label: 'Naha WGS84↔XV',      a: 'EPSG:4326', b: 'EPSG:6683', x: 127.6811, y: 26.2124, z: 0 },
-  { label: 'Yonaguni WGS84↔XVI', a: 'EPSG:4326', b: 'EPSG:6684', x: 122.9333, y: 24.4667, z: 0 },
-  { label: 'Etorofu WGS84↔XIII', a: 'EPSG:4326', b: 'EPSG:6681', x: 148.8,    y: 45.5,    z: 0 },
-  { label: 'MinamiT WGS84↔XIX',  a: 'EPSG:4326', b: 'EPSG:6687', x: 153.9811, y: 24.2867, z: 0 },
+  // === Japan: WGS84 ↔ Plane Rectangular ===
+  { label: 'JP:Tokyo WGS84↔IX',     a: 'EPSG:4326', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 0 },
+  { label: 'JP:Osaka WGS84↔VI',     a: 'EPSG:4326', b: 'EPSG:6674', x: 135.5023, y: 34.6937, z: 0 },
+  { label: 'JP:Sapporo WGS84↔XII',  a: 'EPSG:4326', b: 'EPSG:6680', x: 141.3469, y: 43.0621, z: 0 },
+  { label: 'JP:Naha WGS84↔XV',      a: 'EPSG:4326', b: 'EPSG:6683', x: 127.6811, y: 26.2124, z: 0 },
+  { label: 'JP:Yonaguni WGS84↔XVI', a: 'EPSG:4326', b: 'EPSG:6684', x: 122.9333, y: 24.4667, z: 0 },
+  { label: 'JP:Etorofu WGS84↔XIII', a: 'EPSG:4326', b: 'EPSG:6681', x: 148.8,    y: 45.5,    z: 0 },
+  { label: 'JP:MinamiT WGS84↔XIX',  a: 'EPSG:4326', b: 'EPSG:6687', x: 153.9811, y: 24.2867, z: 0 },
+  { label: 'JP:Tokyo JGD2011↔IX',   a: 'EPSG:6668', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 0 },
+  { label: 'JP:Tokyo WGS84↔IX Z=50',a: 'EPSG:4326', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 50 },
+  { label: 'JP:Fujisan WGS84↔VIII', a: 'EPSG:4326', b: 'EPSG:6676', x: 138.7274, y: 35.3606, z: 3776 },
 
-  // JGD2011 geographic ↔ Plane Rectangular
-  { label: 'Tokyo JGD2011↔IX',   a: 'EPSG:6668', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 0 },
-  { label: 'Osaka JGD2011↔VI',   a: 'EPSG:6668', b: 'EPSG:6674', x: 135.5023, y: 34.6937, z: 0 },
+  // === Japan: Datum round-trips ===
+  { label: 'JP:JGD2000↔JGD2011',    a: 'EPSG:4612', b: 'EPSG:6668', x: 139.7671, y: 35.6812, z: 0 },
+  { label: 'JP:Tokyo↔JGD2011',      a: 'EPSG:4301', b: 'EPSG:6668', x: 139.7671, y: 35.6812, z: 0 },
+  { label: 'JP:WGS84↔JGD2000',      a: 'EPSG:4326', b: 'EPSG:4612', x: 139.7671, y: 35.6812, z: 0 },
+  { label: 'JP:4979↔4326 Z=50',     a: 'EPSG:4979', b: 'EPSG:4326', x: 139.7671, y: 35.6812, z: 50 },
 
-  // With height
-  { label: 'Tokyo WGS84↔IX Z=50',      a: 'EPSG:4326', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 50 },
-  { label: 'Fujisan WGS84↔VIII Z=3776', a: 'EPSG:4326', b: 'EPSG:6676', x: 138.7274, y: 35.3606, z: 3776 },
+  // === Japan: Geoid round-trip ===
+  { label: 'JP:GSIGEO2011 RT',      a: 'EPSG:6667', b: 'EPSG:6697', x: 139.7671, y: 35.6812, z: 76 },
+  { label: 'JP:JPGEO2024 RT',       a: 'EPSG:6667', b: 'EPSG:6695', x: 139.7671, y: 35.6812, z: 76 },
+  { label: 'JP:WGS84→JGD2024 RT',   a: 'EPSG:4979', b: 'CZM:JGD2024', x: 139.7671, y: 35.6812, z: 76 },
 
-  // Datum round-trips
-  { label: 'Tokyo JGD2000↔JGD2011',     a: 'EPSG:4612', b: 'EPSG:6668', x: 139.7671, y: 35.6812, z: 0 },
-  { label: 'Sendai JGD2000↔JGD2011',    a: 'EPSG:4612', b: 'EPSG:6668', x: 140.8719, y: 38.2682, z: 0 },
-  { label: 'Tokyo Tokyo↔JGD2011',       a: 'EPSG:4301', b: 'EPSG:6668', x: 139.7671, y: 35.6812, z: 0 },
-  { label: 'Tokyo WGS84↔JGD2000',       a: 'EPSG:4326', b: 'EPSG:4612', x: 139.7671, y: 35.6812, z: 0 },
+  // === US: NAD multi-step round-trips ===
+  { label: 'US:NYC NAD27↔NAD83(2011)',   a: 'EPSG:4267', b: 'EPSG:6318', x: -74.0060, y: 40.7128, z: 0 },
+  { label: 'US:NYC NAD83↔NAD83(2011)',   a: 'EPSG:4269', b: 'EPSG:6318', x: -74.0060, y: 40.7128, z: 0 },
+  { label: 'US:NYC WGS84↔UTM18N',       a: 'EPSG:4326', b: 'EPSG:32618', x: -74.0060, y: 40.7128, z: 0 },
+  { label: 'US:SF WGS84↔UTM10N',        a: 'EPSG:4326', b: 'EPSG:32610', x: -122.4194, y: 37.7749, z: 0 },
+  { label: 'US:NYC NAD83↔StatePlane',   a: 'EPSG:4269', b: 'EPSG:2260', x: -74.0060, y: 40.7128, z: 0 },
 
-  // 3D ↔ 2D
-  { label: 'Tokyo 4979↔4326 Z=50',      a: 'EPSG:4979', b: 'EPSG:4326', x: 139.7671, y: 35.6812, z: 50 },
+  // === Europe: multi-step datum round-trips ===
+  { label: 'BE:Brussels BD72↔ETRS89',    a: 'EPSG:4313', b: 'EPSG:4258', x: 4.3517,   y: 50.8503, z: 0 },
+  { label: 'BE:Brussels BL72↔BL2008',    a: 'EPSG:31370', b: 'EPSG:3812', x: 150327,  y: 170563,  z: 0 },
+  { label: 'UK:London OSGB36↔ETRS89',    a: 'EPSG:4277', b: 'EPSG:4258', x: -0.1278,  y: 51.5074, z: 0 },
+  { label: 'UK:London BNG↔WGS84',        a: 'EPSG:27700', b: 'EPSG:4326', x: 530000,  y: 180000,  z: 0 },
+  { label: 'FR:Paris NTF↔RGF93',         a: 'EPSG:4275', b: 'EPSG:4171', x: 2.3522,   y: 48.8566, z: 0 },
+  { label: 'DE:Berlin DHDN↔ETRS89',      a: 'EPSG:4314', b: 'EPSG:4258', x: 13.4050,  y: 52.5200, z: 0 },
+  { label: 'DE:Berlin GK4↔UTM32',        a: 'EPSG:31468', b: 'EPSG:25832', x: 4587442, y: 5822377, z: 0 },
+  { label: 'CH:Bern CH1903+↔ETRS89',     a: 'EPSG:4150', b: 'EPSG:4258', x: 7.4474,   y: 46.9481, z: 0 },
+  { label: 'NL:Amsterdam RD↔ETRS89',     a: 'EPSG:4289', b: 'EPSG:4258', x: 4.9041,   y: 52.3676, z: 0 },
+  { label: 'AT:Vienna MGI↔ETRS89',       a: 'EPSG:4312', b: 'EPSG:4258', x: 16.3738,  y: 48.2082, z: 0 },
+  { label: 'NO:Oslo NGO48↔ETRS89',       a: 'EPSG:4273', b: 'EPSG:4258', x: 10.7522,  y: 59.9139, z: 0 },
 
-  // Geoid round-trip
-  { label: 'Tokyo GSIGEO2011 RT',        a: 'EPSG:6667', b: 'EPSG:6697', x: 139.7671, y: 35.6812, z: 76 },
-  { label: 'Tokyo JPGEO2024 RT',         a: 'EPSG:6667', b: 'EPSG:6695', x: 139.7671, y: 35.6812, z: 76 },
-  { label: 'Tokyo WGS84→JGD2024 RT',    a: 'EPSG:4979', b: 'CZM:JGD2024', x: 139.7671, y: 35.6812, z: 76 },
+  // === Oceania ===
+  { label: 'NZ:Wellington NZGD49↔2000',  a: 'EPSG:4272', b: 'EPSG:4167', x: 174.7762, y: -41.2865, z: 0 },
+  { label: 'NZ:Wellington WGS84↔NZTM',   a: 'EPSG:4326', b: 'EPSG:2193', x: 174.7762, y: -41.2865, z: 0 },
+  { label: 'AU:Sydney GDA94↔GDA2020',    a: 'EPSG:4283', b: 'EPSG:7844', x: 151.2093, y: -33.8688, z: 0 },
+  { label: 'AU:Sydney WGS84↔MGA56',      a: 'EPSG:4326', b: 'EPSG:28356', x: 151.2093, y: -33.8688, z: 0 },
+
+  // === Global: EGM96 geoid ===
+  { label: 'GL:NYC WGS84↔EGM96',        a: 'EPSG:4979', b: 'EPSG:5773', x: -74.0060, y: 40.7128, z: 30 },
+  { label: 'GL:London WGS84↔EGM96',     a: 'EPSG:4979', b: 'EPSG:5773', x: -0.1278,  y: 51.5074, z: 80 },
 ];
 
 async function runRoundTrips(proj) {
