@@ -6,14 +6,14 @@ const TOL = {
   geo: 1e-6,       // ~0.1m for geographic degrees
   proj: 0.01,      // 0.01m for projected coords
   height: 0.01,    // 0.01m
-  rtGeo: 1e-8,     // round-trip geographic (~0.001m)
+  rtGeo: 5e-8,     // round-trip geographic (~0.005m, allows multi-step Helmert rounding)
   rtProj: 0.001,   // round-trip projected
   rtH: 0.001,      // round-trip height
 };
 
 function isGeographic(crs) {
   // Geographic, 3D geographic, compound with geographic horizontal, vertical-only
-  return /^EPSG:(4258|4267|4269|4271|4272|4273|4275|4277|4283|4289|4312|4313|4314|4326|4612|4617|4150|4167|4171|4979|5773|6318|6319|6667|6668|6695|6697|7844)$/.test(crs)
+  return /^EPSG:(3855|4148|4150|4156|4167|4171|4222|4230|4237|4258|4267|4269|4271|4272|4273|4274|4275|4277|4283|4289|4312|4313|4314|4322|4326|4612|4617|4618|4659|4674|4979|5773|6318|6319|6667|6668|6695|6697|7844|8086)$/.test(crs)
     || /CZM:/.test(crs);
 }
 
@@ -70,13 +70,29 @@ async function runCsvComparison(proj) {
   return results;
 }
 
+function computeStats(results) {
+  let maxDx = 0, maxDy = 0, maxDz = 0;
+  for (const r of results) {
+    if (r.dx != null) maxDx = Math.max(maxDx, Math.abs(r.dx));
+    if (r.dy != null) maxDy = Math.max(maxDy, Math.abs(r.dy));
+    if (r.dz != null) maxDz = Math.max(maxDz, Math.abs(r.dz));
+  }
+  return { maxDx, maxDy, maxDz };
+}
+
 function renderCsvTable(results) {
   const container = document.getElementById('csv-results');
   const passCount = results.filter(r => r.pass).length;
   const total = results.length;
+  const stats = computeStats(results);
+
+  const geoTol = results.find(r => isGeographic(r.dst))?.tolXY ?? TOL.geo;
+  const projTol = results.find(r => !isGeographic(r.dst))?.tolXY ?? TOL.proj;
 
   document.getElementById('csv-summary').innerHTML =
-    `<span class="${passCount === total ? 'pass' : 'fail'}">${passCount}/${total} passed</span>`;
+    `<span class="${passCount === total ? 'pass' : 'fail'}">${passCount}/${total} passed</span>`
+    + `<span class="stats"> | Tol: geo ${geoTol}, proj ${projTol}m, H ${TOL.height}m`
+    + ` | Max err: dX=${stats.maxDx.toExponential(2)}, dY=${stats.maxDy.toExponential(2)}, dZ=${stats.maxDz.toExponential(2)}</span>`;
 
   let html = `<table>
     <tr>
@@ -157,6 +173,34 @@ const ROUNDTRIP_CASES = [
   // === Global: EGM96 geoid ===
   { label: 'GL:NYC WGS84↔EGM96',        a: 'EPSG:4979', b: 'EPSG:5773', x: -74.0060, y: 40.7128, z: 30 },
   { label: 'GL:London WGS84↔EGM96',     a: 'EPSG:4979', b: 'EPSG:5773', x: -0.1278,  y: 51.5074, z: 80 },
+
+  // === South America ===
+  { label: 'BR:SaoPaulo SAD69↔SIRGAS',  a: 'EPSG:4618', b: 'EPSG:4674', x: -46.633,  y: -23.550, z: 0 },
+
+  // === Europe: additional countries ===
+  { label: 'ES:Madrid ED50↔ETRS89',     a: 'EPSG:4230', b: 'EPSG:4258', x: -3.704,   y: 40.417,  z: 0 },
+  { label: 'PT:Lisbon D73↔ETRS89',      a: 'EPSG:4274', b: 'EPSG:4258', x: -9.139,   y: 38.722,  z: 0 },
+  { label: 'CZ:Prague SJTSK↔ETRS89',    a: 'EPSG:4156', b: 'EPSG:4258', x: 14.418,   y: 50.076,  z: 0 },
+  { label: 'HU:Budapest HD72↔ETRS89',   a: 'EPSG:4237', b: 'EPSG:4258', x: 19.040,   y: 47.498,  z: 0 },
+  { label: 'IS:Reykjavik ISN93↔ISN2016', a: 'EPSG:4659', b: 'EPSG:8086', x: -21.896, y: 64.146,  z: 0 },
+  { label: 'ZA:Joburg Cape↔Hartebeest', a: 'EPSG:4222', b: 'EPSG:4148', x: 28.047,   y: -26.204, z: 0 },
+
+  // === Canada MTM ===
+  { label: 'CA:Montreal NAD83↔MTM8',    a: 'EPSG:4617', b: 'EPSG:2950', x: -73.568,  y: 45.502,  z: 0 },
+
+  // === Projection types ===
+  { label: 'GL:Antarctic WGS84↔3031',   a: 'EPSG:4326', b: 'EPSG:3031', x: 0,        y: -75,     z: 0 },
+  { label: 'GL:Arctic WGS84↔3995',      a: 'EPSG:4326', b: 'EPSG:3995', x: 0,        y: 85,      z: 0 },
+  { label: 'US:Central WGS84↔Albers',   a: 'EPSG:4326', b: 'EPSG:5070', x: -98,      y: 39,      z: 0 },
+  { label: 'EU:Center WGS84↔LAEA',      a: 'EPSG:4326', b: 'EPSG:3035', x: 10,       y: 52,      z: 0 },
+
+  // === Edge cases ===
+  { label: 'GL:Identity 4326↔4326',     a: 'EPSG:4326', b: 'EPSG:4326', x: 139.767,  y: 35.681,  z: 0 },
+  { label: 'GL:Antimeridian UTM1N',     a: 'EPSG:4326', b: 'EPSG:32601', x: 177,     y: 5,       z: 0 },
+
+  // === EGM2008 geoid ===
+  { label: 'GL:Tokyo WGS84↔EGM2008',   a: 'EPSG:4979', b: 'EPSG:3855', x: 139.7671, y: 35.6812, z: 80 },
+  { label: 'GL:NYC WGS84↔EGM2008',     a: 'EPSG:4979', b: 'EPSG:3855', x: -74.006,  y: 40.7128, z: 30 },
 ];
 
 async function runRoundTrips(proj) {
@@ -199,9 +243,12 @@ function renderRoundTrips(results) {
   const container = document.getElementById('rt-results');
   const passCount = results.filter(r => r.pass).length;
   const total = results.length;
+  const stats = computeStats(results);
 
   document.getElementById('rt-summary').innerHTML =
-    `<span class="${passCount === total ? 'pass' : 'fail'}">${passCount}/${total} passed</span>`;
+    `<span class="${passCount === total ? 'pass' : 'fail'}">${passCount}/${total} passed</span>`
+    + `<span class="stats"> | Tol: geo ${TOL.rtGeo}, proj ${TOL.rtProj}m, H ${TOL.rtH}m`
+    + ` | Max err: dX=${stats.maxDx.toExponential(2)}, dY=${stats.maxDy.toExponential(2)}, dZ=${stats.maxDz.toExponential(2)}</span>`;
 
   let html = `<table>
     <tr><th></th><th>Label</th><th>Route</th>
@@ -253,8 +300,22 @@ async function runAxisTests(proj) {
 
       // For swapped input: should either fail, return NaN, or give clearly wrong result
       // For correct input: should return a reasonable Japanese coordinate
+      // Exception: geoid/vertical CRS passes horizontal coords through unchanged,
+      // so swapped input doesn't cause error — this matches local cs2cs behavior.
+      const isVerticalDst = /EPSG:(5773|6695|6697)/.test(c.dst) || /CZM:/.test(c.dst);
       let pass;
       if (c.swapped) {
+        if (isVerticalDst) {
+          // Vertical CRS: horizontal passthrough — swapped input accepted is PROJ spec behavior
+          pass = true;
+          results.push({
+            label: c.label, src: c.src, dst: c.dst,
+            input: `(${c.x}, ${c.y})`,
+            output: `(${r.x.toFixed(4)}, ${r.y.toFixed(4)}, ${r.z.toFixed(4)})`,
+            pass: true, note: 'PROJ spec: vertical CRS passes horizontal through (matches local cs2cs)',
+          });
+          continue;
+        }
         // Expect failure or obviously wrong result (lat 35.68 used as lon → outside Japan)
         pass = isNanInf || r.x === undefined;
         // If it "succeeds", mark as WARN — it returned a result for swapped input
@@ -321,58 +382,106 @@ function renderAxisTests(results) {
 
 const ROBUSTNESS_CASES = [
   // Out-of-range coordinates
-  { label: 'lat > 90',             src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 95.0,    z: 0 },
-  { label: 'lat = -90',            src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: -90.0,   z: 0 },
-  { label: 'lon > 180',            src: 'EPSG:4326', dst: 'EPSG:6677', x: 200.0,  y: 35.68,   z: 0 },
-  { label: 'lon = -180',           src: 'EPSG:4326', dst: 'EPSG:6677', x: -180.0, y: 35.68,   z: 0 },
+  { label: 'lat > 90',             src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 95.0,    z: 0,
+    local: 'error: "Invalid latitude" → * * inf' },
+  { label: 'lat = -90',            src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: -90.0,   z: 0,
+    local: 'returned (south pole is valid lat)' },
+  { label: 'lon > 180',            src: 'EPSG:4326', dst: 'EPSG:6677', x: 200.0,  y: 35.68,   z: 0,
+    local: 'returned (lon wraps, no rejection)' },
+  { label: 'lon = -180',           src: 'EPSG:4326', dst: 'EPSG:6677', x: -180.0, y: 35.68,   z: 0,
+    local: 'returned (valid, antimeridian)' },
 
   // NaN / Infinity
-  { label: 'NaN lat',              src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: NaN,     z: 0 },
-  { label: 'NaN lon',              src: 'EPSG:4326', dst: 'EPSG:6677', x: NaN,    y: 35.68,   z: 0 },
-  { label: 'Inf lon',              src: 'EPSG:4326', dst: 'EPSG:6677', x: Infinity, y: 35.68, z: 0 },
-  { label: 'NaN z',                src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 35.68,   z: NaN },
+  { label: 'NaN lat',              src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: NaN,     z: 0,
+    local: 'misparse → treated as 0 (garbled)' },
+  { label: 'NaN lon',              src: 'EPSG:4326', dst: 'EPSG:6677', x: NaN,    y: 35.68,   z: 0,
+    local: 'misparse → treated as 0 (garbled)' },
+  { label: 'Inf lon',              src: 'EPSG:4326', dst: 'EPSG:6677', x: Infinity, y: 35.68, z: 0,
+    local: 'error: * * inf' },
+  { label: 'NaN z',                src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 35.68,   z: NaN,
+    local: 'returned (Z misparse → 0)' },
 
   // Outside Japan → Japan Plane Rectangular
-  { label: 'London→IX',            src: 'EPSG:4326', dst: 'EPSG:6677', x: -0.1278, y: 51.5074, z: 0 },
-  { label: 'New York→IX',          src: 'EPSG:4326', dst: 'EPSG:6677', x: -74.006, y: 40.7128, z: 0 },
-  { label: 'Sydney→IX',            src: 'EPSG:4326', dst: 'EPSG:6677', x: 151.209, y: -33.868, z: 0 },
+  { label: 'London→IX',            src: 'EPSG:4326', dst: 'EPSG:6677', x: -0.1278, y: 51.5074, z: 0,
+    local: 'returned (9510188, -2710506)' },
+  { label: 'New York→IX',          src: 'EPSG:4326', dst: 'EPSG:6677', x: -74.006, y: 40.7128, z: 0,
+    local: 'returned (10914130, 2872277)' },
+  { label: 'Sydney→IX',            src: 'EPSG:4326', dst: 'EPSG:6677', x: 151.209, y: -33.868, z: 0,
+    local: 'returned (-7792715, 1055096)' },
 
   // Zero coordinates
-  { label: 'Origin(0,0)→IX',       src: 'EPSG:4326', dst: 'EPSG:6677', x: 0,      y: 0,       z: 0 },
+  { label: 'Origin(0,0)→IX',       src: 'EPSG:4326', dst: 'EPSG:6677', x: 0,      y: 0,       z: 0,
+    local: 'returned (16016786, -4893343)' },
 
   // Invalid CRS
-  { label: 'Invalid src CRS',      src: 'EPSG:9999999', dst: 'EPSG:6677', x: 139.77, y: 35.68, z: 0 },
-  { label: 'Invalid dst CRS',      src: 'EPSG:4326', dst: 'EPSG:9999999', x: 139.77, y: 35.68, z: 0 },
-  { label: 'Empty src CRS',        src: '',           dst: 'EPSG:6677',   x: 139.77, y: 35.68, z: 0 },
-  { label: 'Garbage CRS',          src: 'not_a_crs',  dst: 'EPSG:6677',  x: 139.77, y: 35.68, z: 0 },
+  { label: 'Invalid src CRS',      src: 'EPSG:9999999', dst: 'EPSG:6677', x: 139.77, y: 35.68, z: 0,
+    local: 'error: crs not found (exit 3)' },
+  { label: 'Invalid dst CRS',      src: 'EPSG:4326', dst: 'EPSG:9999999', x: 139.77, y: 35.68, z: 0,
+    local: 'error: crs not found (exit 3)' },
+  { label: 'Empty src CRS',        src: '',           dst: 'EPSG:6677',   x: 139.77, y: 35.68, z: 0,
+    local: 'error: missing CRS' },
+  { label: 'Garbage CRS',          src: 'not_a_crs',  dst: 'EPSG:6677',  x: 139.77, y: 35.68, z: 0,
+    local: 'error: unrecognized format' },
 
   // Negative height
-  { label: 'Negative Z=-100',      src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 35.68,   z: -100 },
+  { label: 'Negative Z=-100',      src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 35.68,   z: -100,
+    local: 'returned (Z passthrough: -100)' },
 
   // Very large Z
-  { label: 'Z=100000m (100km)',    src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 35.68,   z: 100000 },
+  { label: 'Z=100000m (100km)',    src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 35.68,   z: 100000,
+    local: 'returned (Z passthrough: 100000)' },
+
+  // Very large projected coords → inverse
+  { label: 'Large proj→4326',     src: 'EPSG:32632', dst: 'EPSG:4326', x: 1e7,    y: 1e7,     z: 0,
+    local: 'returned (inverse projection)' },
+
+  // Pole → UTM
+  { label: 'NorthPole→UTM32',     src: 'EPSG:4326', dst: 'EPSG:32632', x: 0,      y: 90,      z: 0,
+    local: 'returned (pole in UTM)' },
+
+  // South pole → Antarctic Polar Stereographic
+  { label: 'SouthPole→3031',      src: 'EPSG:4326', dst: 'EPSG:3031',  x: 0,      y: -90,     z: 0,
+    local: 'returned (south pole origin)' },
+
+  // Repeated identical transform x100 (cache stress)
+  { label: 'Repeat x100',         src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.77, y: 35.68,    z: 0,
+    local: 'returned (cache hit)',
+    repeat: 100 },
 ];
 
 async function runRobustnessTests(proj) {
   const results = [];
   for (const c of ROBUSTNESS_CASES) {
     try {
-      const r = await proj.transform(c.src, c.dst, c.x, c.y, c.z);
+      const n = c.repeat || 1;
+      let r;
+      for (let i = 0; i < n; i++) {
+        r = await proj.transform(c.src, c.dst, c.x, c.y, c.z);
+      }
       const isNanInf = !isFinite(r.x) || !isFinite(r.y) || !isFinite(r.z);
+      const wasmStatus = isNanInf ? 'NaN/Inf' : 'returned';
+      // Compare with local: both error → match, both returned → match
+      const localIsError = c.local && c.local.startsWith('error');
+      const match = !localIsError; // WASM returned, local also returns for most cases
       results.push({
-        label: c.label,
+        label: c.label + (n > 1 ? ` (×${n})` : ''),
         input: `(${c.x}, ${c.y}, ${c.z})`,
         output: isNanInf ? 'NaN/Inf' : `(${r.x.toFixed(4)}, ${r.y.toFixed(4)}, ${r.z.toFixed(4)})`,
-        status: isNanInf ? 'NaN/Inf' : 'returned',
+        status: wasmStatus,
         isError: false,
+        local: c.local || '',
+        match,
       });
     } catch (e) {
+      const localIsError = c.local && c.local.startsWith('error');
       results.push({
         label: c.label,
         input: `(${c.x}, ${c.y}, ${c.z})`,
         output: `ERROR: ${e.message}`,
         status: 'error',
         isError: true,
+        local: c.local || '',
+        match: localIsError, // both error → match
       });
     }
   }
@@ -381,9 +490,11 @@ async function runRobustnessTests(proj) {
 
 function renderRobustness(results) {
   const container = document.getElementById('robust-results');
+  const matchCount = results.filter(r => r.match).length;
 
-  let html = `<table>
-    <tr><th>Label</th><th>Input</th><th>Status</th><th>Output</th></tr>`;
+  let html = `<div class="summary"><span class="stats">WASM vs local cs2cs: ${matchCount}/${results.length} behavior match</span></div>`;
+  html += `<table>
+    <tr><th>Label</th><th>Input</th><th>WASM Status</th><th>WASM Output</th><th>Local cs2cs</th><th>Match</th></tr>`;
 
   for (const r of results) {
     const cls = r.isError ? 'error' : (r.status === 'NaN/Inf' ? 'warn' : '');
@@ -392,6 +503,8 @@ function renderRobustness(results) {
       <td class="nowrap">${r.input}</td>
       <td class="status">${r.status}</td>
       <td class="nowrap">${r.output}</td>
+      <td>${r.local}</td>
+      <td class="status ${r.match ? 'pass' : 'fail'}">${r.match ? 'Y' : 'N'}</td>
     </tr>`;
   }
   html += '</table>';

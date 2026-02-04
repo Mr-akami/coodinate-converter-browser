@@ -27,9 +27,11 @@ static PJ* crs_get_horizontal_2d(PJ* crs) {
 
 /*
  * Check if a CRS has a vertical component (3D geographic or compound).
- * When either source or target has vertical, we must skip
- * proj_normalize_for_visualization because it breaks bbox evaluation
- * for vgridshift candidates (PROJ 9.x bug).
+ * When either source or target has vertical, we skip
+ * proj_normalize_for_visualization and use manual axis-order detection
+ * instead. proj_normalize_for_visualization inserts axis-swap steps that
+ * can interfere with vgridshift grid candidate selection (observed in
+ * PROJ 9.6–9.8; no upstream fix confirmed as of 9.7.1).
  */
 static int crs_has_vertical(const char* crs_str) {
   PJ* crs = proj_create(g_ctx, crs_str);
@@ -42,22 +44,9 @@ static int crs_has_vertical(const char* crs_str) {
   return vert;
 }
 
-/* Check if a CRS is a vertical-only CRS. */
-static int crs_is_vertical(const char* crs_str) {
-  PJ* crs = proj_create(g_ctx, crs_str);
-  if (!crs) return 0;
-
-  PJ_TYPE t = proj_get_type(crs);
-  int is_vertical = (t == PJ_TYPE_VERTICAL_CRS);
-  proj_destroy(crs);
-  return is_vertical;
-}
-
 /* Check if a CRS axis order is north,east (lat/ northing first). */
-static int crs_is_north_east(const char* crs_str) {
-  PJ* crs = proj_create(g_ctx, crs_str);
+static int crs_obj_is_north_east(PJ* crs) {
   if (!crs) return 0;
-
   int swap = 0;
   PJ* target = crs;
   PJ* horiz = NULL;
@@ -83,7 +72,6 @@ static int crs_is_north_east(const char* crs_str) {
   }
 
   if (horiz) proj_destroy(horiz);
-  proj_destroy(crs);
   return swap;
 }
 
@@ -115,11 +103,13 @@ static PJ* proj_get_op(const char* src, const char* dst) {
       if (dst_crs) proj_destroy(dst_crs);
       return NULL;
     }
+    PJ_TYPE src_type = proj_get_type(src_crs);
+    PJ_TYPE dst_type = proj_get_type(dst_crs);
 
     PJ* src_for_op = src_crs;
     PJ* src_compound = NULL;
-    if (proj_get_type(src_crs) == PJ_TYPE_VERTICAL_CRS &&
-        proj_get_type(dst_crs) != PJ_TYPE_VERTICAL_CRS) {
+    if (src_type == PJ_TYPE_VERTICAL_CRS &&
+        dst_type != PJ_TYPE_VERTICAL_CRS) {
       PJ* horiz = crs_get_horizontal_2d(dst_crs);
       if (horiz) {
         src_compound = proj_create_compound_crs(g_ctx, "src+vert", horiz, src_crs);
@@ -129,17 +119,28 @@ static PJ* proj_get_op(const char* src, const char* dst) {
     }
 
     op = proj_create_crs_to_crs_from_pj(g_ctx, src_for_op, dst_crs, NULL, NULL);
-
-    g_swap_in = crs_is_north_east(src);
-    g_swap_out = crs_is_north_east(dst);
-    if (proj_get_type(src_crs) == PJ_TYPE_VERTICAL_CRS &&
-        proj_get_type(dst_crs) != PJ_TYPE_VERTICAL_CRS) {
-      g_swap_in = crs_is_north_east(dst);
+    if (!op) {
+      if (src_compound) proj_destroy(src_compound);
+      proj_destroy(src_crs);
+      proj_destroy(dst_crs);
+      return NULL;
     }
-    if (!g_swap_out && crs_is_vertical(dst)) {
+
+    PJ* op_src = proj_get_source_crs(g_ctx, op);
+    PJ* op_dst = proj_get_target_crs(g_ctx, op);
+    g_swap_in = crs_obj_is_north_east(op_src);
+    g_swap_out = crs_obj_is_north_east(op_dst);
+    /* Vertical-only CRS has no horizontal axes, so crs_obj_is_north_east
+       returns 0. But the pipeline preserves horizontal axis order from
+       the other (non-vertical) side. Inherit swap accordingly. */
+    if (dst_type == PJ_TYPE_VERTICAL_CRS) {
       g_swap_out = g_swap_in;
     }
-
+    if (src_type == PJ_TYPE_VERTICAL_CRS) {
+      g_swap_in = g_swap_out;
+    }
+    if (op_src) proj_destroy(op_src);
+    if (op_dst) proj_destroy(op_dst);
     if (src_compound) proj_destroy(src_compound);
     proj_destroy(src_crs);
     proj_destroy(dst_crs);

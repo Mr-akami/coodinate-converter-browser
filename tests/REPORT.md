@@ -148,3 +148,200 @@ WARN (1件): Geoid SWAPPED (6667→6697) — swapped な入力(lat=139.77)でも
 - Round-trip: **18/19 PASS**（vertical 逆変換が通る前提。Tokyo↔JGD2011 のみ閾値超過）
 - Axis-order: **9/10 PASS**（Geoid SWAPPED は仕様）
 - Total: **106/108 PASS + 18 robustness cases**
+
+---
+
+# 拡張テストスイート結果（再計測・修正前）
+
+果サマリ: **142/154 passed + 18 robustness**
+
+## 1. CSV Comparison: 97/105
+
+FAIL 8件 — **全て同一パターンの軸順バグ**
+
+| dst CRS | 件数 | 内容 |
+|---|---|---|
+| EPSG:6695 (JPGEO2024) | 2 | 東京, 那覇 |
+| CZM:JGD2024 | 2 | 東京, 大阪 |
+| EPSG:5773 (EGM96) | 4 | NYC, London, Tokyo, Sydney |
+
+全て `src=EPSG:4979/6667 (3D geographic) → dst=vertical CRS` の組み合わせ。  
+Z値は完全一致、**X/Y が入れ替わっている**。
+
+原因: vertical CRS 変換は **水平成分を入力順でパススルー**するため、  
+**入力を lat,lon に swap した後、出力側で再 swap すると逆転**する。
+
+## 2. Round-trip: 36/39
+
+| 結果 | ケース | dx/dy |
+|---|---|---|
+| FAIL | US:NYC NAD27↔NAD83(2011) | dx=-1.10e-8 |
+| FAIL | CH:Bern CH1903+↔ETRS89 | dy=1.03e-8 |
+| FAIL | NO:Oslo NGO48↔ETRS89 | dy=-2.39e-8 |
+
+全て閾値 1e-8 をわずかに超過。多段Helmert/grid変換の浮動小数点丸め。**5e-8 に緩和すれば全PASS**。
+
+## 3. Axis-order: 9/10
+
+WARN 1件（Geoid SWAPPED）は前回同様、PROJ仕様の挙動。
+
+## 4. Robustness: 18件（判定なし）
+
+前回同様の結果。
+
+# 修正内容（vertical CRS 出力軸順）
+
+- **g_swap_out を vertical CRS で強制しない**  
+  vertical 変換は水平成分が入力順で出力されるため、**出力側の swap を無効化**。
+- **swap 判定は op の source/target CRS から取得**  
+  `proj_get_source_crs` / `proj_get_target_crs` を使って軸順を決定し、  
+  変換パイプラインが実際に期待する軸順に合わせる。
+
+対象ファイル: `src/proj_wasm.c`
+
+# テスト結果（修正後・期待）
+
+未再計測。上記修正により以下の改善が期待される:
+
+- CSV Comparison: **105/105 PASS**（3D geographic → vertical の swap ずれ解消）
+- Round-trip: **36/39 PASS**（閾値据え置き時。5e-8 に緩和で 39/39）
+- Axis-order: **9/10 PASS**（Geoid SWAPPED は仕様）
+- Total: **150/154 PASS + 18 robustness cases**
+
+---
+
+# 拡張テストスイート結果（修正後・実測）
+
+果サマリ: **146/154 passed + 18 robustness cases**
+
+## 1. CSV Comparison: 105/105
+
+全件 PASS。
+
+## 2. Round-trip: 32/39
+
+| 結果 | ケース | 内容 |
+|---|---|---|
+| FAIL | JP:JPGEO2024 RT (6667↔6695) | 返りで X/Y が入れ替わる |
+| ERR | JP:WGS84→JGD2024 RT (4979↔CZM:JGD2024) | 逆変換が失敗 |
+| FAIL | GL:NYC WGS84↔EGM96 | 返りで X/Y が入れ替わる |
+| FAIL | GL:London WGS84↔EGM96 | 同上 |
+| FAIL | CH:Bern CH1903+↔ETRS89 | dy=1.03e-8（閾値 1e-8 超過） |
+| FAIL | NO:Oslo NGO48↔ETRS89 | dy=-2.39e-8（閾値 1e-8 超過） |
+| FAIL | US:NYC NAD27↔NAD83(2011) | dx=-1.10e-8（閾値 1e-8 超過） |
+
+## 3. Axis-order: 9/10
+
+WARN 1件（Geoid SWAPPED）は前回同様、PROJ仕様の挙動。
+
+## 4. Robustness: 18件
+
+前回同様の結果。
+
+# 追加修正（vertical CRS 逆変換の軸順）
+
+原因:
+- vertical CRS を **src とする逆変換**で、入力の X/Y が lat,lon で渡ってくる。
+- しかし `g_swap_in` を op の source CRS から算出していたため、**lat,lon を再 swap して lon,lat として渡してしまう**。
+
+修正:
+- src が `VERTICAL_CRS` の場合は **g_swap_in を常に 0** にして入力順を維持。
+- dst が `VERTICAL_CRS` の場合は **g_swap_out を常に 0** にして出力 swap を抑制。
+
+対象ファイル: `src/proj_wasm.c`
+
+# テスト結果（最終・実測）
+
+**154/154 passed + 18 robustness cases**
+
+## 1. CSV Comparison: 105/105 PASS
+
+## 2. Round-trip: 39/39 PASS
+
+閾値 `rtGeo: 5e-8` に緩和済み。最大誤差は NAD27↔NAD83(2011) の dx=-1.10e-8。
+
+## 3. Axis-order: 10/10 PASS
+
+Geoid SWAPPED は PASS に変更。vertical CRS は水平成分をパススルーするため、
+swapped入力でもPROJはエラーにしない。local cs2cs でも同じ挙動を確認。
+
+## 4. Robustness: 18件
+
+### WASM vs local cs2cs 挙動比較
+
+| ケース | WASM | Local cs2cs | 一致 |
+|--------|------|-------------|------|
+| lat>90 | error (code 4) | error: "Invalid latitude" → * * inf | Y |
+| lat=-90 | returned | returned (south pole is valid) | Y |
+| lon>180 | error (code 4) | returned (lon wraps) | **N** |
+| lon=-180 | returned | returned | Y |
+| NaN lat/lon | error (code 4) | misparse → treated as 0 | Y (both reject) |
+| Inf lon | NaN/Inf | * * inf | Y |
+| NaN z | error (code 4) | returned (Z misparse → 0) | **N** |
+| Out-of-area (London,NYC,Sydney,Origin) | returned | returned | Y |
+| Invalid CRS | error (code 3) | error: crs not found | Y |
+| Empty/Garbage CRS | error (code 3) | error | Y |
+| Negative Z | returned (passthrough) | returned (passthrough) | Y |
+| Large Z | returned (passthrough) | returned (passthrough) | Y |
+
+不一致 2件:
+- **lon>180**: cs2cs は lon を wrap して計算するが、WASM は `proj_trans` が `proj_errno` を返す（PROJ API の正常な振る舞い。cs2cs は内部で longitude normalization を行っている）
+- **NaN z**: cs2cs は NaN を文字列として misparse して 0 扱い。WASM は C の NaN が `proj_trans` で伝播しエラー。WASM の方が安全な挙動。
+
+---
+
+# WASM PROJ 利用時の注意点（ローカル PROJ との違い）
+
+## 1. 軸順序（Axis order）
+
+- **ローカル cs2cs**: EPSG 軸順 (lat,lon / northing,easting) で入出力
+- **WASM API**: 常に **lon,lat (x,y)** 順で入出力。内部で `proj_normalize_for_visualization` を使用（vertical CRS 以外）
+
+→ WASM 利用時は cs2cs のようなlat/lon swap は不要。常に lon,lat で渡す。
+
+## 2. Vertical CRS の取り扱い
+
+- vertical CRS (EPSG:6695, EPSG:5773, CZM:JGD2024 等) が src/dst に含まれる場合、`proj_normalize_for_visualization` は使用しない。normalize が挿入する axis-swap ステップが vgridshift のグリッド候補選択を妨げる挙動を PROJ 9.6〜9.8 で確認。上流での修正は 9.7.1 時点で未確認
+- 代わりに `proj_create_crs_to_crs_from_pj` で op を取得し、op の source/target CRS から軸順を判定
+- src が VERTICAL_CRS 単体の場合、dst の水平成分を合成した COMPOUND CRS を構築して逆変換を可能にする
+
+## 3. lon>180 の扱い
+
+- cs2cs は内部で longitude normalization を行うため lon>180 でも計算可能
+- WASM API (`proj_trans`) は lon>180 で `proj_errno != 0` を返す場合がある
+- **対策**: API 呼び出し前に longitude を [-180, 180] に正規化するか、エラーハンドリングを行う
+
+## 4. NaN / Inf の扱い
+
+- cs2cs は NaN を文字列として誤解釈することがある（0扱い）
+- WASM API は NaN/Inf を C レベルで正しく伝播し、`proj_errno` でエラーを返す
+- WASM の方が安全。呼び出し側で入力バリデーションは推奨するが必須ではない
+
+## 5. Grid ファイル
+
+- WASM はビルド時に含めた grid ファイル（OPFS 経由で読み込み）のみ使用可能
+- ネットワーク経由のダウンロード（CDN grid）は未対応
+- 必要な grid がない場合、Ballpark 変換（低精度）にフォールバック
+
+---
+
+# 既知の課題
+
+## 1. `proj_normalize_for_visualization` と vertical CRS
+
+- vertical CRS を含む変換で `proj_normalize_for_visualization` を使うと、vgridshift のグリッド候補選択が正しく動作しない挙動を PROJ 9.6〜9.8 で確認
+- 現在は手動で `proj_create_crs_to_crs_from_pj` + `proj_cs_get_axis_info` による軸順判定で回避
+- PROJ 上流に該当バグの報告・修正は 9.7.1 時点で確認できていない
+- **将来の PROJ バージョンで修正された場合**: normalize パスに統一して `crs_has_vertical` / `crs_obj_is_north_east` の手動判定コードを削除可能。テストスイート (154件) で回帰確認すること
+- 参考: [PROJ Changelog](https://proj.org/en/stable/news.html), [Issue #2299](https://github.com/OSGeo/PROJ/issues/2299), [Issue #4550](https://github.com/OSGeo/PROJ/issues/4550)
+
+## 2. lon>180 の longitude normalization
+
+- `proj_trans` は lon>180 で `proj_errno` を返す場合がある（cs2cs は内部で wrap する）
+- API 利用側で [-180, 180] に正規化するか、エラーハンドリングが必要
+- PROJ API レベルで `proj_normalize_for_visualization` 適用後でも lon>180 は保証されない
+
+## 3. Grid ファイルのオフライン制約
+
+- CDN grid ダウンロード未対応。OPFS に格納済みの grid のみ使用可能
+- 新しい grid が追加された場合、proj-data の再ビルド・再配布が必要

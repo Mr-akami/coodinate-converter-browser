@@ -14,13 +14,21 @@ echo "PROJ: $(cs2cs --version 2>&1)" >&2
 echo "PROJ_DATA: $PROJ_DATA" >&2
 
 # Detect if cs2cs output axis 1 is northing/latitude (needs swap to x=lon/easting, y=lat/northing)
-# by checking projinfo WKT for the first AXIS direction.
-# Returns 0 (true=needs swap) if first axis is north or lat.
+# by checking projinfo WKT for the first AXIS abbreviation and direction.
+# Returns 0 (true=needs swap) if first axis is northing/latitude.
+# Note: polar stereographic CRS may have direction="north" but abbreviation="(E)" → no swap.
 needs_swap() {
   local crs="$1"
-  local first_axis
-  first_axis=$(projinfo "$crs" 2>&1 | grep -oP 'AXIS\[.*?,(north|south|east|west|up)' | head -1 | grep -oP '(north|south|east|west|up)$')
-  case "$first_axis" in
+  local first_axis_line
+  first_axis_line=$(projinfo "$crs" 2>&1 | grep -P 'AXIS\[' | head -1)
+  # Check abbreviation: if first axis is labeled (E) or (X), it's easting → no swap
+  if echo "$first_axis_line" | grep -qP 'AXIS\["\(E\)"|AXIS\["[Ee]asting'; then
+    return 1  # easting first → no swap
+  fi
+  # Otherwise fall back to direction check
+  local first_dir
+  first_dir=$(echo "$first_axis_line" | grep -oP '(north|south|east|west|up)' | tail -1)
+  case "$first_dir" in
     north|south) return 0 ;;  # lat/northing first → swap
     *) return 1 ;;            # easting/east first or vertical → no swap
   esac
@@ -49,8 +57,25 @@ transform() {
   read -r c1 c2 c3 <<< "$result"
 
   # Output: convert from EPSG axis order to (x=lon/easting, y=lat/northing)
+  # For vertical-only CRS (first axis = "up"), PROJ preserves source horizontal
+  # axis order, so inherit swap from source CRS.
   local out_x out_y
-  if needs_swap "$dst"; then
+  local dst_first_line dst_first
+  dst_first_line=$(projinfo "$dst" 2>&1 | grep -P 'AXIS\[' | head -1)
+  # Check for easting abbreviation first (handles polar stereographic)
+  if echo "$dst_first_line" | grep -qP 'AXIS\["\(E\)"|AXIS\["[Ee]asting'; then
+    dst_first="east"
+  else
+    dst_first=$(echo "$dst_first_line" | grep -oP '(north|south|east|west|up)' | tail -1)
+  fi
+  if [ "$dst_first" = "up" ]; then
+    # vertical-only dst: output horizontal order = source order
+    if needs_swap "$src"; then
+      out_x="$c2"; out_y="$c1"
+    else
+      out_x="$c1"; out_y="$c2"
+    fi
+  elif needs_swap "$dst"; then
     out_x="$c2"; out_y="$c1"  # swap lat,lon → lon,lat / N,E → E,N
   else
     out_x="$c1"; out_y="$c2"  # already easting,northing
@@ -268,6 +293,101 @@ transform "AU:Sydney WGS84→MGA56"        EPSG:4326 EPSG:28356 151.2093 -33.868
 transform "GL:London WGS84→EGM96"        EPSG:4979 EPSG:5773 -0.1278  51.5074  80  >> "$OUT"
 transform "GL:Tokyo WGS84→EGM96"         EPSG:4979 EPSG:5773 139.7671 35.6812  80  >> "$OUT"
 transform "GL:Sydney WGS84→EGM96"        EPSG:4979 EPSG:5773 151.2093 -33.8688 80  >> "$OUT"
+
+###############################################################################
+# SOUTH AMERICA — Brazil, Argentina
+###############################################################################
+# Brazil: SAD69→SIRGAS2000 (grid: br_ibge_SAD69_003.tif)
+transform "BR:SaoPaulo SAD69→SIRGAS"     EPSG:4618 EPSG:4674 -46.633  -23.550  0   >> "$OUT"
+# Brazil: WGS84→UTM23S
+transform "BR:SaoPaulo WGS84→UTM23S"     EPSG:4326 EPSG:31983 -46.633 -23.550  0   >> "$OUT"
+# Argentina: WGS84→POSGAR2007 zone5
+transform "AR:BuenosAires WGS84→POSGAR5" EPSG:4326 EPSG:5347 -58.382  -34.604  0   >> "$OUT"
+
+###############################################################################
+# EUROPE — additional countries
+###############################################################################
+# Spain: ED50→ETRS89 (grid: es_ign_SPED2ETV2.tif)
+transform "ES:Madrid ED50→ETRS89"        EPSG:4230 EPSG:4258 -3.704   40.417   0   >> "$OUT"
+# Portugal: D73→ETRS89 (grid: pt_dgt_D73_ETRS89_geo.tif)
+transform "PT:Lisbon D73→ETRS89"         EPSG:4274 EPSG:4258 -9.139   38.722   0   >> "$OUT"
+# Czech Republic: S-JTSK→ETRS89 (grid: cz_cuzk_table_jtsk)
+transform "CZ:Prague SJTSK→ETRS89"       EPSG:4156 EPSG:4258 14.418   50.076   0   >> "$OUT"
+# Denmark: WGS84→ETRS89/UTM32N
+transform "DK:Copenhagen WGS84→UTM32"    EPSG:4326 EPSG:25832 12.568   55.676   0   >> "$OUT"
+# Finland: KKJ→EUREF-FIN (grid: fi_nls_ykj_etrs35fin.json)
+transform "FI:Helsinki KKJ→EUREF"        EPSG:2393 EPSG:3067 3385000  6672000  0   >> "$OUT"
+# Sweden: WGS84→SWEREF99TM
+transform "SE:Stockholm WGS84→SWEREF99"  EPSG:4326 EPSG:3006 18.069   59.329   0   >> "$OUT"
+# Poland: WGS84→PUWG2000/zone7
+transform "PL:Warsaw WGS84→PUWG2000z7"   EPSG:4326 EPSG:2180 21.012   52.230   0   >> "$OUT"
+# Hungary: HD72→ETRS89 (grid: hu_bme_hd72corr.tif)
+transform "HU:Budapest HD72→ETRS89"      EPSG:4237 EPSG:4258 19.040   47.498   0   >> "$OUT"
+# Iceland: ISN93→ISN2016 (grid: is_lmi_ISN93_ISN2016.tif)
+transform "IS:Reykjavik ISN93→ISN2016"   EPSG:4659 EPSG:8086 -21.896  64.146   0   >> "$OUT"
+
+###############################################################################
+# MIDDLE EAST / AFRICA
+###############################################################################
+# Turkey: WGS84→UTM36N
+transform "TR:Istanbul WGS84→UTM36N"     EPSG:4326 EPSG:32636 29.009   41.009   0   >> "$OUT"
+# Mexico: WGS84→UTM14N
+transform "MX:MexicoCity WGS84→UTM14N"   EPSG:4326 EPSG:32614 -99.133  19.433   0   >> "$OUT"
+# South Africa: WGS84→Hartebeest Lo29 (axis=wsu)
+transform "ZA:Joburg WGS84→Lo29"         EPSG:4326 EPSG:2053 28.047   -26.204  0   >> "$OUT"
+# South Africa: Cape→Hartebeest (grid: za_cdngi_sageoid2010.tif)
+transform "ZA:Joburg Cape→Hartebeest"    EPSG:4222 EPSG:4148 28.047   -26.204  0   >> "$OUT"
+
+###############################################################################
+# CANADA — MTM
+###############################################################################
+# NAD83(CSRS)→MTM8
+transform "CA:Montreal NAD83→MTM8"        EPSG:4617 EPSG:2950 -73.568  45.502   0   >> "$OUT"
+
+###############################################################################
+# PROJECTION TYPES — Polar, Albers, LAEA, Krovak
+###############################################################################
+# Polar Stereographic Antarctic
+transform "GL:Antarctic WGS84→3031"       EPSG:4326 EPSG:3031 0        -75      0   >> "$OUT"
+# Polar Stereographic Arctic
+transform "GL:Arctic WGS84→3995"          EPSG:4326 EPSG:3995 0        85       0   >> "$OUT"
+# UPS South
+transform "GL:UPS-South WGS84→32761"      EPSG:4326 EPSG:32761 0       -85      0   >> "$OUT"
+# UPS North
+transform "GL:UPS-North WGS84→32661"      EPSG:4326 EPSG:32661 0       88       0   >> "$OUT"
+# Albers Equal Area (NAD83 Conus Albers)
+transform "US:Central WGS84→Albers"       EPSG:4326 EPSG:5070 -98      39       0   >> "$OUT"
+# LAEA Europe
+transform "EU:Center WGS84→LAEA"          EPSG:4326 EPSG:3035 10       52       0   >> "$OUT"
+# Krovak (S-JTSK/05)
+transform "CZ:Prague WGS84→Krovak"        EPSG:4326 EPSG:5514 14.418   50.076   0   >> "$OUT"
+# South-oriented TM (same as Lo29 above, redundant but explicit projection test)
+
+###############################################################################
+# EDGE CASES
+###############################################################################
+# Identity transform
+transform "GL:Identity 4326→4326"         EPSG:4326 EPSG:4326 139.767  35.681   0   >> "$OUT"
+# WGS72→WGS84
+transform "GL:WGS72→WGS84"               EPSG:4322 EPSG:4326 139.767  35.681   0   >> "$OUT"
+# Antimeridian
+transform "GL:Antimeridian UTM1N"         EPSG:4326 EPSG:32601 177     5        0   >> "$OUT"
+# Antimeridian south
+transform "GL:Antimeridian UTM60S"        EPSG:4326 EPSG:32760 179     -45      0   >> "$OUT"
+# Very high latitude
+transform "GL:HighLat 89.99→3031"         EPSG:4326 EPSG:3031 0        -89.99   0   >> "$OUT"
+# UTM boundary (84°N)
+transform "GL:UTM-north-limit"            EPSG:4326 EPSG:32632 9       84       0   >> "$OUT"
+# Cross-hemisphere: Sydney → LAEA Europe
+transform "GL:Sydney→LAEA-EU"             EPSG:4326 EPSG:3035 151.2    -33.9    0   >> "$OUT"
+
+###############################################################################
+# GLOBAL — EGM2008 geoid
+###############################################################################
+transform "GL:Tokyo WGS84→EGM2008"        EPSG:4979 EPSG:3855 139.7671 35.6812  80  >> "$OUT"
+transform "GL:NYC WGS84→EGM2008"          EPSG:4979 EPSG:3855 -74.006  40.7128  30  >> "$OUT"
+transform "GL:London WGS84→EGM2008"       EPSG:4979 EPSG:3855 -0.1278  51.5074  80  >> "$OUT"
+transform "GL:Sydney WGS84→EGM2008"       EPSG:4979 EPSG:3855 151.2093 -33.8688 80  >> "$OUT"
 
 COUNT=$(tail -n +2 "$OUT" | wc -l)
 echo "Generated $COUNT test cases → $OUT" >&2
