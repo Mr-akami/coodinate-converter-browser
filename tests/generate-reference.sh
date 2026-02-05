@@ -389,5 +389,90 @@ transform "GL:NYC WGS84→EGM2008"          EPSG:4979 EPSG:3855 -74.006  40.7128
 transform "GL:London WGS84→EGM2008"       EPSG:4979 EPSG:3855 -0.1278  51.5074  80  >> "$OUT"
 transform "GL:Sydney WGS84→EGM2008"       EPSG:4979 EPSG:3855 151.2093 -33.8688 80  >> "$OUT"
 
+###############################################################################
+# INVERSE: projected → geographic
+###############################################################################
+# Japan Plane Rectangular → WGS84
+transform "JP:IX→WGS84 Tokyo"             EPSG:6677 EPSG:4326 -5995.19 -35367.23 0  >> "$OUT"
+transform "JP:VI→WGS84 Osaka"             EPSG:6674 EPSG:4326 -45598.42 -144802.79 0 >> "$OUT"
+transform "JP:XII→WGS84 Sapporo"          EPSG:6680 EPSG:4326 -73558.30 -103797.33 0 >> "$OUT"
+# UTM → WGS84
+transform "US:UTM18N→WGS84 NYC"           EPSG:32618 EPSG:4326 583959.37 4507350.99 0 >> "$OUT"
+transform "US:UTM10N→WGS84 SF"            EPSG:32610 EPSG:4326 551130.77 4180998.88 0 >> "$OUT"
+transform "EU:UTM32N→WGS84 Berlin"        EPSG:32632 EPSG:4326 798812.80 5828000.00 0 >> "$OUT"
+# European projections → WGS84
+transform "FR:Lambert93→WGS84 Paris"      EPSG:2154 EPSG:4326 652469.02 6862035.26 0  >> "$OUT"
+transform "UK:BNG→WGS84 Edinburgh"        EPSG:27700 EPSG:4326 325000   674000     0  >> "$OUT"
+transform "CH:LV95→WGS84 Bern"            EPSG:2056 EPSG:4326 2600667.47 1199668.43 0 >> "$OUT"
+# Southern hemisphere
+transform "AU:MGA56→WGS84 Sydney"         EPSG:28356 EPSG:4326 334368.63 6250948.35 0 >> "$OUT"
+transform "NZ:NZTM→WGS84 Wellington"      EPSG:2193 EPSG:4326 1748735.55 5427916.48 0 >> "$OUT"
+transform "BR:UTM23S→WGS84 SaoPaulo"      EPSG:31983 EPSG:4326 333317.91 7394644.04 0 >> "$OUT"
+
+###############################################################################
+# PROJECTED → PROJECTED (cross-zone, cross-system)
+###############################################################################
+# Japan zone to zone
+transform "JP:IX→VI Tokyo-to-Osaka"       EPSG:6677 EPSG:6674 -5995.19 -35367.23 0  >> "$OUT"
+transform "JP:XII→XI Sapporo-to-Otaru"    EPSG:6680 EPSG:6679 -73558.30 -103797.33 0 >> "$OUT"
+# UTM zone to zone
+transform "US:UTM18N→UTM17N NYC"          EPSG:32618 EPSG:32617 583959.37 4507350.99 0 >> "$OUT"
+transform "EU:UTM32N→UTM33N Berlin"       EPSG:32632 EPSG:32633 798812.80 5828000.00 0 >> "$OUT"
+# Cross-system Europe
+transform "EU:BNG→Lambert93"              EPSG:27700 EPSG:2154 530000   180000     0  >> "$OUT"
+transform "EU:Lambert93→UTM31N"           EPSG:2154 EPSG:32631 652469.02 6862035.26 0 >> "$OUT"
+transform "EU:GK4→LV95 Berlin-to-Bern"    EPSG:31468 EPSG:2056 4587442  5822377    0  >> "$OUT"
+# Cross-hemisphere projected
+transform "AU:MGA56→NZTM Sydney-to-NZ"    EPSG:28356 EPSG:2193 334368.63 6250948.35 0 >> "$OUT"
+
+###############################################################################
+# 3D WITH HEIGHT — ellipsoidal height transforms
+###############################################################################
+# WGS84 3D → Japan Plane Rectangular (height passthrough)
+transform "JP:4979→6677 Z=100"            EPSG:4979 EPSG:6677 139.7671 35.6812  100  >> "$OUT"
+transform "JP:4979→6677 Z=500"            EPSG:4979 EPSG:6677 139.7671 35.6812  500  >> "$OUT"
+transform "JP:4979→6677 Z=3776"           EPSG:4979 EPSG:6677 138.7274 35.3606  3776 >> "$OUT"
+# Various heights for geoid
+transform "JP:GSIGEO Z=0"                 EPSG:6667 EPSG:6697 139.7671 35.6812  0    >> "$OUT"
+transform "JP:GSIGEO Z=100"               EPSG:6667 EPSG:6697 139.7671 35.6812  100  >> "$OUT"
+transform "JP:GSIGEO Z=500"               EPSG:6667 EPSG:6697 139.7671 35.6812  500  >> "$OUT"
+transform "JP:GSIGEO Z=-50 (below geoid)" EPSG:6667 EPSG:6697 139.7671 35.6812  -50  >> "$OUT"
+# EGM96 various heights
+transform "GL:EGM96 NYC Z=0"              EPSG:4979 EPSG:5773 -74.006  40.7128  0    >> "$OUT"
+transform "GL:EGM96 NYC Z=500"            EPSG:4979 EPSG:5773 -74.006  40.7128  500  >> "$OUT"
+# Inverse geoid (compound with orthometric → 3D ellipsoidal)
+transform "JP:6697→6667 Tokyo"            EPSG:6697 EPSG:6667 139.7671 35.6812  39.34 >> "$OUT"
+# Note: 5773 is vertical-only, cannot be used as standalone source in cs2cs
+
+###############################################################################
+# COMPOUND CRS — explicit compound transforms
+###############################################################################
+# JGD2011 3D → JGD2011 + JGD2011(vertical) compound (6697)
+transform "JP:6667→6697 compound"         EPSG:6667 EPSG:6697 139.7671 35.6812  76   >> "$OUT"
+# WGS84 → WGS84+EGM2008 compound (9518)
+transform "GL:4979→9518 Tokyo"            EPSG:4979 EPSG:9518 139.7671 35.6812  80   >> "$OUT"
+transform "GL:4979→9518 NYC"              EPSG:4979 EPSG:9518 -74.006  40.7128  30   >> "$OUT"
+# ETRS89 + EVRF2000 (European, 7409)
+transform "EU:4937→7409 Berlin"           EPSG:4937 EPSG:7409 13.405   52.520   80   >> "$OUT"
+# NAD83 3D + NAVD88 (US, 5498)
+transform "US:4152→5498 NYC"              EPSG:4152 EPSG:5498 -74.006  40.7128  30   >> "$OUT"
+
+###############################################################################
+# SOUTHERN HEMISPHERE — additional coverage
+###############################################################################
+# Australia additional cities
+transform "AU:Perth WGS84→MGA50"          EPSG:4326 EPSG:28350 115.8605 -31.9505 0  >> "$OUT"
+transform "AU:Brisbane WGS84→MGA56"       EPSG:4326 EPSG:28356 153.0251 -27.4698 0  >> "$OUT"
+transform "AU:Adelaide WGS84→MGA54"       EPSG:4326 EPSG:28354 138.6007 -34.9285 0  >> "$OUT"
+# New Zealand additional
+transform "NZ:Auckland WGS84→NZTM"        EPSG:4326 EPSG:2193 174.7633 -36.8485 0  >> "$OUT"
+transform "NZ:Christchurch WGS84→NZTM"    EPSG:4326 EPSG:2193 172.6362 -43.5321 0  >> "$OUT"
+# South America additional
+transform "CL:Santiago WGS84→UTM19S"      EPSG:4326 EPSG:32719 -70.6693 -33.4489 0  >> "$OUT"
+transform "AR:Mendoza WGS84→POSGAR5"      EPSG:4326 EPSG:5347 -68.8272 -32.8895 0  >> "$OUT"
+# Antarctica
+transform "GL:McMurdo WGS84→3031"         EPSG:4326 EPSG:3031 166.6667 -77.8500 0  >> "$OUT"
+transform "GL:Vostok WGS84→3031"          EPSG:4326 EPSG:3031 106.8667 -78.4500 0  >> "$OUT"
+
 COUNT=$(tail -n +2 "$OUT" | wc -l)
 echo "Generated $COUNT test cases → $OUT" >&2

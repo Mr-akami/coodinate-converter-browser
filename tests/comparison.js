@@ -201,6 +201,34 @@ const ROUNDTRIP_CASES = [
   // === EGM2008 geoid ===
   { label: 'GL:Tokyo WGS84↔EGM2008',   a: 'EPSG:4979', b: 'EPSG:3855', x: 139.7671, y: 35.6812, z: 80 },
   { label: 'GL:NYC WGS84↔EGM2008',     a: 'EPSG:4979', b: 'EPSG:3855', x: -74.006,  y: 40.7128, z: 30 },
+
+  // === Inverse: projected → geographic ===
+  { label: 'JP:6677↔4326 Tokyo',       a: 'EPSG:6677', b: 'EPSG:4326', x: -5995.19,  y: -35367.23, z: 0 },
+  { label: 'US:32618↔4326 NYC',        a: 'EPSG:32618', b: 'EPSG:4326', x: 583959.37, y: 4507350.99, z: 0 },
+  { label: 'FR:2154↔4326 Paris',       a: 'EPSG:2154', b: 'EPSG:4326', x: 652469.02, y: 6862035.26, z: 0 },
+  { label: 'AU:28356↔4326 Sydney',     a: 'EPSG:28356', b: 'EPSG:4326', x: 334368.63, y: 6250948.35, z: 0 },
+  { label: 'NZ:2193↔4326 Wellington',  a: 'EPSG:2193', b: 'EPSG:4326', x: 1748735.55, y: 5427916.48, z: 0 },
+
+  // === Projected → projected (cross-zone) ===
+  { label: 'JP:6677↔6674 IX-VI',       a: 'EPSG:6677', b: 'EPSG:6674', x: -5995.19,  y: -35367.23, z: 0 },
+  { label: 'US:32618↔32617 UTM18-17',  a: 'EPSG:32618', b: 'EPSG:32617', x: 583959.37, y: 4507350.99, z: 0 },
+  { label: 'EU:27700↔2154 BNG-L93',    a: 'EPSG:27700', b: 'EPSG:2154', x: 530000,   y: 180000, z: 0 },
+
+  // === 3D with height ===
+  { label: 'JP:4979↔6677 Z=100',       a: 'EPSG:4979', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 100 },
+  { label: 'JP:4979↔6677 Z=500',       a: 'EPSG:4979', b: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 500 },
+  { label: 'JP:GSIGEO Z=100',          a: 'EPSG:6667', b: 'EPSG:6697', x: 139.7671, y: 35.6812, z: 100 },
+  { label: 'JP:6697↔6667 inverse',     a: 'EPSG:6697', b: 'EPSG:6667', x: 139.7671, y: 35.6812, z: 39.34 },
+
+  // === Compound CRS ===
+  { label: 'JP:6667↔6697 compound',    a: 'EPSG:6667', b: 'EPSG:6697', x: 139.7671, y: 35.6812, z: 76 },
+  { label: 'GL:4979↔9518 compound',    a: 'EPSG:4979', b: 'EPSG:9518', x: 139.7671, y: 35.6812, z: 80 },
+
+  // === Southern hemisphere additional ===
+  { label: 'AU:Perth WGS84↔MGA50',     a: 'EPSG:4326', b: 'EPSG:28350', x: 115.8605, y: -31.9505, z: 0 },
+  { label: 'NZ:Christchurch↔NZTM',     a: 'EPSG:4326', b: 'EPSG:2193', x: 172.6362, y: -43.5321, z: 0 },
+  { label: 'CL:Santiago↔UTM19S',       a: 'EPSG:4326', b: 'EPSG:32719', x: -70.6693, y: -33.4489, z: 0 },
+  { label: 'GL:McMurdo↔3031',          a: 'EPSG:4326', b: 'EPSG:3031', x: 166.6667, y: -77.8500, z: 0 },
 ];
 
 async function runRoundTrips(proj) {
