@@ -575,6 +575,105 @@ function renderRobustness(results) {
   container.innerHTML = html;
 }
 
+// ── Performance benchmark ────────────────────────────────────────────────────
+
+const PERF_CASES = [
+  { label: 'Simple UTM',       src: 'EPSG:4326', dst: 'EPSG:32654', x: 139.77, y: 35.68 },
+  { label: 'Web Mercator',     src: 'EPSG:4326', dst: 'EPSG:3857',  x: 139.77, y: 35.68 },
+  { label: 'Japan Plane IX',   src: 'EPSG:4326', dst: 'EPSG:6677',  x: 139.77, y: 35.68 },
+  { label: 'NAD27→NAD83(2011)', src: 'EPSG:4267', dst: 'EPSG:6318', x: -74.0,  y: 40.7 },
+  { label: 'JGD2000→JGD2011',  src: 'EPSG:4612', dst: 'EPSG:6668',  x: 139.77, y: 35.68 },
+  { label: 'GSIGEO2011',       src: 'EPSG:6667', dst: 'EPSG:6697',  x: 139.77, y: 35.68, z: 76 },
+  { label: 'EGM96',            src: 'EPSG:4979', dst: 'EPSG:5773',  x: 139.77, y: 35.68, z: 80 },
+  { label: 'Identity',         src: 'EPSG:4326', dst: 'EPSG:4326',  x: 139.77, y: 35.68 },
+];
+const PERF_ITERATIONS = 1000;
+
+async function runPerfTests(proj) {
+  const results = [];
+  for (const c of PERF_CASES) {
+    // Warm-up
+    await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0);
+
+    const start = performance.now();
+    for (let i = 0; i < PERF_ITERATIONS; i++) {
+      await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0);
+    }
+    const elapsed = performance.now() - start;
+
+    const avgMs = elapsed / PERF_ITERATIONS;
+    const opsSec = 1000 / avgMs;
+    results.push({ label: c.label, avgMs, opsSec });
+  }
+  return results;
+}
+
+async function loadNativeBenchmark() {
+  try {
+    const res = await fetch('./benchmark-native.csv');
+    if (!res.ok) return null;
+    const text = await res.text();
+    const lines = text.trim().split('\n');
+    const header = lines[0].split(',');
+    return lines.slice(1).map(line => {
+      const cols = line.split(',');
+      return {
+        label: cols[0],
+        avgMs: parseFloat(cols[1]),
+        opsSec: parseFloat(cols[2]),
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
+function renderPerfResults(wasmResults, nativeResults) {
+  const container = document.getElementById('perf-results');
+
+  let html = `<table>
+    <tr>
+      <th>Transform</th>
+      <th>WASM (ms)</th>
+      <th>WASM (ops/s)</th>`;
+
+  if (nativeResults) {
+    html += `<th>Native (ms)</th><th>Native (ops/s)</th><th>Ratio</th>`;
+  }
+  html += '</tr>';
+
+  for (const w of wasmResults) {
+    const n = nativeResults?.find(r => r.label === w.label);
+    const ratio = n ? (w.avgMs / n.avgMs).toFixed(2) : '-';
+    const ratioClass = n ? (ratio < 2 ? 'pass' : (ratio < 5 ? 'warn' : 'fail')) : '';
+
+    html += `<tr>
+      <td>${w.label}</td>
+      <td>${w.avgMs.toFixed(3)}</td>
+      <td>${w.opsSec.toFixed(1)}</td>`;
+
+    if (nativeResults) {
+      html += `<td>${n ? n.avgMs.toFixed(3) : '-'}</td>`;
+      html += `<td>${n ? n.opsSec.toFixed(1) : '-'}</td>`;
+      html += `<td class="${ratioClass}">${ratio}x</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  if (nativeResults) {
+    const avgRatio = wasmResults.reduce((sum, w) => {
+      const n = nativeResults.find(r => r.label === w.label);
+      return n ? sum + w.avgMs / n.avgMs : sum;
+    }, 0) / wasmResults.length;
+    html += `<div class="stats">Average WASM/Native ratio: ${avgRatio.toFixed(2)}x</div>`;
+  } else {
+    html += `<div class="stats">Native benchmark not found. Run: bash tests/benchmark-native.sh > tests/benchmark-native.csv</div>`;
+  }
+
+  container.innerHTML = html;
+}
+
 // ── Formatting helpers ───────────────────────────────────────────────────────
 
 function fmt(v) {
@@ -629,9 +728,17 @@ export async function run() {
   const robustResults = await runRobustnessTests(proj);
   renderRobustness(robustResults);
 
+  // 5. Performance benchmark
+  statusEl.textContent = 'Running performance benchmark (1000 iterations each)...';
+  const [wasmPerfResults, nativePerfResults] = await Promise.all([
+    runPerfTests(proj),
+    loadNativeBenchmark(),
+  ]);
+  renderPerfResults(wasmPerfResults, nativePerfResults);
+
   const totalPass = csvResults.filter(r => r.pass).length
     + rtResults.filter(r => r.pass).length
     + axisResults.filter(r => r.pass).length;
   const totalTests = csvResults.length + rtResults.length + axisResults.length;
-  statusEl.textContent = `Done. ${totalPass}/${totalTests} passed (+ ${robustResults.length} robustness cases)`;
+  statusEl.textContent = `Done. ${totalPass}/${totalTests} passed (+ ${robustResults.length} robustness + ${wasmPerfResults.length} perf cases)`;
 }
