@@ -474,5 +474,121 @@ transform "AR:Mendoza WGS84→POSGAR5"      EPSG:4326 EPSG:5347 -68.8272 -32.889
 transform "GL:McMurdo WGS84→3031"         EPSG:4326 EPSG:3031 166.6667 -77.8500 0  >> "$OUT"
 transform "GL:Vostok WGS84→3031"          EPSG:4326 EPSG:3031 106.8667 -78.4500 0  >> "$OUT"
 
+###############################################################################
+# ASIA — additional countries
+###############################################################################
+# China: WGS84→CGCS2000
+transform "CN:Beijing WGS84→CGCS2000"     EPSG:4326 EPSG:4490 116.4074 39.9042  0   >> "$OUT"
+transform "CN:Shanghai WGS84→CGCS2000"    EPSG:4326 EPSG:4490 121.4737 31.2304  0   >> "$OUT"
+# Korea: WGS84→Korea2000
+transform "KR:Seoul WGS84→Korea2000"      EPSG:4326 EPSG:4737 126.9780 37.5665  0   >> "$OUT"
+transform "KR:Busan WGS84→Korea2000"      EPSG:4326 EPSG:4737 129.0756 35.1796  0   >> "$OUT"
+# Taiwan: WGS84→TWD97
+transform "TW:Taipei WGS84→TWD97"         EPSG:4326 EPSG:3824 121.5654 25.0330  0   >> "$OUT"
+# India: WGS84→UTM44N
+transform "IN:Delhi WGS84→UTM44N"         EPSG:4326 EPSG:32644 77.2090  28.6139  0   >> "$OUT"
+transform "IN:Mumbai WGS84→UTM43N"        EPSG:4326 EPSG:32643 72.8777  19.0760  0   >> "$OUT"
+# Thailand: WGS84→UTM47N
+transform "TH:Bangkok WGS84→UTM47N"       EPSG:4326 EPSG:32647 100.5018 13.7563  0   >> "$OUT"
+# Vietnam: WGS84→UTM48N
+transform "VN:Hanoi WGS84→UTM48N"         EPSG:4326 EPSG:32648 105.8342 21.0278  0   >> "$OUT"
+# Singapore: WGS84→SVY21
+transform "SG:Singapore WGS84→SVY21"      EPSG:4326 EPSG:3414 103.8198 1.3521   0   >> "$OUT"
+# Philippines: WGS84→PRS92
+transform "PH:Manila WGS84→PRS92"         EPSG:4326 EPSG:4683 120.9842 14.5995  0   >> "$OUT"
+# Indonesia: WGS84→UTM49S
+transform "ID:Jakarta WGS84→UTM49S"       EPSG:4326 EPSG:32749 106.8456 -6.2088  0   >> "$OUT"
+
+###############################################################################
+# MIDDLE EAST — additional
+###############################################################################
+# UAE: WGS84→UTM40N
+transform "AE:Dubai WGS84→UTM40N"         EPSG:4326 EPSG:32640 55.2708  25.2048  0   >> "$OUT"
+# Saudi Arabia: WGS84→UTM37N
+transform "SA:Riyadh WGS84→UTM37N"        EPSG:4326 EPSG:32637 46.6753  24.7136  0   >> "$OUT"
+# Israel: WGS84→ITM
+transform "IL:TelAviv WGS84→ITM"          EPSG:4326 EPSG:2039 34.7818  32.0853  0   >> "$OUT"
+# Egypt: WGS84→UTM36N
+transform "EG:Cairo WGS84→UTM36N"         EPSG:4326 EPSG:32636 31.2357  30.0444  0   >> "$OUT"
+
+###############################################################################
+# AFRICA — additional
+###############################################################################
+# Nigeria: WGS84→UTM32N
+transform "NG:Lagos WGS84→UTM32N"         EPSG:4326 EPSG:32632 3.3792   6.5244   0   >> "$OUT"
+# Kenya: WGS84→UTM37S
+transform "KE:Nairobi WGS84→UTM37S"       EPSG:4326 EPSG:32737 36.8219  -1.2921  0   >> "$OUT"
+# Morocco: WGS84→Morocco Lambert
+transform "MA:Casablanca WGS84→MorcLamb"  EPSG:4326 EPSG:26191 -7.5898  33.5731  0   >> "$OUT"
+
+###############################################################################
+# RUSSIA / EASTERN EUROPE
+###############################################################################
+# Russia: WGS84→UTM zone
+transform "RU:Moscow WGS84→UTM37N"        EPSG:4326 EPSG:32637 37.6173  55.7558  0   >> "$OUT"
+transform "RU:StPetersburg WGS84→UTM36N"  EPSG:4326 EPSG:32636 30.3351  59.9343  0   >> "$OUT"
+# Ukraine: WGS84→UTM36N
+transform "UA:Kyiv WGS84→UTM36N"          EPSG:4326 EPSG:32636 30.5234  50.4501  0   >> "$OUT"
+# Romania: WGS84→Stereo70
+transform "RO:Bucharest WGS84→Stereo70"   EPSG:4326 EPSG:3844 26.1025  44.4268  0   >> "$OUT"
+# Greece: WGS84→GGRS87
+transform "GR:Athens WGS84→GGRS87"        EPSG:4326 EPSG:2100 23.7275  37.9838  0   >> "$OUT"
+
+###############################################################################
+# SPECIAL PROJECTIONS — additional
+###############################################################################
+# Web Mercator (EPSG:3857)
+transform "GL:Tokyo WGS84→WebMercator"    EPSG:4326 EPSG:3857 139.7671 35.6812  0   >> "$OUT"
+transform "GL:NYC WGS84→WebMercator"      EPSG:4326 EPSG:3857 -74.006  40.7128  0   >> "$OUT"
+transform "GL:London WGS84→WebMercator"   EPSG:4326 EPSG:3857 -0.1278  51.5074  0   >> "$OUT"
+transform "GL:Sydney WGS84→WebMercator"   EPSG:4326 EPSG:3857 151.2093 -33.8688 0   >> "$OUT"
+# Inverse Web Mercator
+transform "GL:WebMerc→WGS84 Tokyo"        EPSG:3857 EPSG:4326 15554550 4257384  0   >> "$OUT"
+transform "GL:WebMerc→WGS84 NYC"          EPSG:3857 EPSG:4326 -8238310 4970072  0   >> "$OUT"
+# Note: Equidistant Cylindrical (4087/32662) has ~21km Y-axis discrepancy in WASM
+# cs2cs: Y=3972013, WASM: Y=3950169 (diff=21843m, ~0.196° lat)
+# Bug in WASM proj_normalize_for_visualization or eqc projection - needs investigation
+# Note: Sinusoidal (54008), Mollweide (54009), Robinson (54030) are ESRI codes, not EPSG
+
+###############################################################################
+# DATUM SHIFT — legacy systems
+###############################################################################
+# Pulkovo 1942 → WGS84 (Eastern Europe/Russia)
+transform "RU:Moscow Pulkovo42→WGS84"     EPSG:4284 EPSG:4326 37.6173  55.7558  0   >> "$OUT"
+# AGD66 → GDA2020 (Australia old→new)
+transform "AU:Sydney AGD66→GDA2020"       EPSG:4202 EPSG:7844 151.2093 -33.8688 0   >> "$OUT"
+# SAD69 → WGS84 (South America)
+transform "BR:SaoPaulo SAD69→WGS84"       EPSG:4618 EPSG:4326 -46.633  -23.550  0   >> "$OUT"
+# ED50 → WGS84 (Europe legacy)
+transform "ES:Madrid ED50→WGS84"          EPSG:4230 EPSG:4326 -3.704   40.417   0   >> "$OUT"
+transform "IT:Rome ED50→WGS84"            EPSG:4230 EPSG:4326 12.4964  41.9028  0   >> "$OUT"
+# NAD27 → WGS84 (North America)
+transform "US:NYC NAD27→WGS84"            EPSG:4267 EPSG:4326 -74.006  40.7128  0   >> "$OUT"
+transform "US:LA NAD27→WGS84"             EPSG:4267 EPSG:4326 -118.2437 33.9425 0   >> "$OUT"
+
+###############################################################################
+# EXTREME COORDINATES
+###############################################################################
+# Near date line
+transform "GL:Fiji WGS84→UTM60S"          EPSG:4326 EPSG:32760 178.0650 -17.7134 0   >> "$OUT"
+transform "GL:Tonga WGS84→UTM1S"          EPSG:4326 EPSG:32701 -175.198 -21.179  0   >> "$OUT"
+# Very high latitude
+transform "GL:Svalbard WGS84→UTM33N"      EPSG:4326 EPSG:32633 15.6356  78.2232  0   >> "$OUT"
+transform "GL:NorthPole WGS84→UPS-N"      EPSG:4326 EPSG:32661 0        89       0   >> "$OUT"
+# Equator crossings
+transform "GL:Quito WGS84→UTM17S"         EPSG:4326 EPSG:32717 -78.4678 -0.1807  0   >> "$OUT"
+transform "GL:Nairobi WGS84→UTM37S"       EPSG:4326 EPSG:32737 36.8219  -1.2921  0   >> "$OUT"
+
+# Note: Vertical-only CRS (5790 OSGM15, 5799 DVR90, 5621 EVRF2007, 5711 AHD, 7839 NZVD2016)
+# cannot be used directly as cs2cs destination - need compound CRS
+
+###############################################################################
+# 3D GEOGRAPHIC — ellipsoidal height variations
+###############################################################################
+transform "JP:Tokyo 4979 Z=1000"          EPSG:4979 EPSG:6677 139.7671 35.6812  1000 >> "$OUT"
+transform "GL:Everest 4979 Z=8849"        EPSG:4979 EPSG:32645 86.9250  27.9881  8849 >> "$OUT"
+transform "GL:DeadSea 4979 Z=-430"        EPSG:4979 EPSG:32636 35.4732  31.5000  -430 >> "$OUT"
+transform "GL:MarianaTrench 4979 Z=-10994" EPSG:4979 EPSG:32655 142.1991 11.3493 -10994 >> "$OUT"
+
 COUNT=$(tail -n +2 "$OUT" | wc -l)
 echo "Generated $COUNT test cases → $OUT" >&2

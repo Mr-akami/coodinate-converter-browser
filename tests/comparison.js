@@ -12,8 +12,9 @@ const TOL = {
 };
 
 function isGeographic(crs) {
-  // Geographic, 3D geographic, compound with geographic horizontal, vertical-only
-  return /^EPSG:(3855|4148|4150|4156|4167|4171|4222|4230|4237|4258|4267|4269|4271|4272|4273|4274|4275|4277|4283|4289|4312|4313|4314|4322|4326|4612|4617|4618|4659|4674|4979|5773|6318|6319|6667|6668|6695|6697|7844|8086)$/.test(crs)
+  // Geographic (2D/3D), compound with geographic horizontal, vertical-only
+  // Includes: national geographic CRS, WGS84/ETRS89 variants, compound CRS
+  return /^EPSG:(3824|3855|4148|4150|4152|4156|4167|4171|4202|4222|4230|4237|4258|4267|4269|4271|4272|4273|4274|4275|4277|4283|4284|4289|4301|4312|4313|4314|4322|4326|4490|4612|4617|4618|4659|4674|4683|4737|4937|4979|5498|5773|5790|5799|5621|5711|6318|6319|6667|6668|6695|6697|7409|7839|7844|8086|9518)$/.test(crs)
     || /CZM:/.test(crs);
 }
 
@@ -229,6 +230,41 @@ const ROUNDTRIP_CASES = [
   { label: 'NZ:Christchurch↔NZTM',     a: 'EPSG:4326', b: 'EPSG:2193', x: 172.6362, y: -43.5321, z: 0 },
   { label: 'CL:Santiago↔UTM19S',       a: 'EPSG:4326', b: 'EPSG:32719', x: -70.6693, y: -33.4489, z: 0 },
   { label: 'GL:McMurdo↔3031',          a: 'EPSG:4326', b: 'EPSG:3031', x: 166.6667, y: -77.8500, z: 0 },
+
+  // === Asia ===
+  { label: 'CN:Beijing WGS84↔CGCS2000', a: 'EPSG:4326', b: 'EPSG:4490', x: 116.4074, y: 39.9042, z: 0 },
+  { label: 'KR:Seoul WGS84↔Korea2000',  a: 'EPSG:4326', b: 'EPSG:4737', x: 126.9780, y: 37.5665, z: 0 },
+  { label: 'TW:Taipei WGS84↔TWD97',     a: 'EPSG:4326', b: 'EPSG:3824', x: 121.5654, y: 25.0330, z: 0 },
+  { label: 'SG:Singapore WGS84↔SVY21',  a: 'EPSG:4326', b: 'EPSG:3414', x: 103.8198, y: 1.3521,  z: 0 },
+  { label: 'ID:Jakarta WGS84↔UTM49S',   a: 'EPSG:4326', b: 'EPSG:32749', x: 106.8456, y: -6.2088, z: 0 },
+
+  // === Middle East ===
+  { label: 'AE:Dubai WGS84↔UTM40N',     a: 'EPSG:4326', b: 'EPSG:32640', x: 55.2708, y: 25.2048, z: 0 },
+  { label: 'IL:TelAviv WGS84↔ITM',      a: 'EPSG:4326', b: 'EPSG:2039', x: 34.7818, y: 32.0853, z: 0 },
+
+  // === Russia/Eastern Europe ===
+  { label: 'RU:Moscow WGS84↔UTM37N',    a: 'EPSG:4326', b: 'EPSG:32637', x: 37.6173, y: 55.7558, z: 0 },
+  { label: 'GR:Athens WGS84↔GGRS87',    a: 'EPSG:4326', b: 'EPSG:2100', x: 23.7275, y: 37.9838, z: 0 },
+  { label: 'RO:Bucharest WGS84↔Stereo70', a: 'EPSG:4326', b: 'EPSG:3844', x: 26.1025, y: 44.4268, z: 0 },
+
+  // === Web Mercator ===
+  { label: 'GL:Tokyo WGS84↔WebMerc',    a: 'EPSG:4326', b: 'EPSG:3857', x: 139.7671, y: 35.6812, z: 0 },
+  { label: 'GL:NYC WGS84↔WebMerc',      a: 'EPSG:4326', b: 'EPSG:3857', x: -74.006,  y: 40.7128, z: 0 },
+  { label: 'GL:WebMerc↔WGS84 Tokyo',    a: 'EPSG:3857', b: 'EPSG:4326', x: 15554550, y: 4257384, z: 0 },
+
+  // === Legacy datums ===
+  { label: 'RU:Moscow Pulkovo42↔WGS84', a: 'EPSG:4284', b: 'EPSG:4326', x: 37.6173, y: 55.7558, z: 0 },
+  { label: 'AU:Sydney AGD66↔GDA2020',   a: 'EPSG:4202', b: 'EPSG:7844', x: 151.2093, y: -33.8688, z: 0 },
+  { label: 'US:NYC NAD27↔WGS84',        a: 'EPSG:4267', b: 'EPSG:4326', x: -74.006,  y: 40.7128, z: 0 },
+
+  // === Extreme coordinates ===
+  { label: 'GL:Fiji WGS84↔UTM60S',      a: 'EPSG:4326', b: 'EPSG:32760', x: 178.0650, y: -17.7134, z: 0 },
+  { label: 'GL:Svalbard WGS84↔UTM33N',  a: 'EPSG:4326', b: 'EPSG:32633', x: 15.6356, y: 78.2232, z: 0 },
+  { label: 'GL:Quito WGS84↔UTM17S',     a: 'EPSG:4326', b: 'EPSG:32717', x: -78.4678, y: -0.1807, z: 0 },
+
+  // === Extreme heights ===
+  { label: 'GL:Everest 4979↔UTM45N',    a: 'EPSG:4979', b: 'EPSG:32645', x: 86.9250, y: 27.9881, z: 8849 },
+  { label: 'GL:DeadSea 4979↔UTM36N',    a: 'EPSG:4979', b: 'EPSG:32636', x: 35.4732, y: 31.5000, z: -430 },
 ];
 
 async function runRoundTrips(proj) {
