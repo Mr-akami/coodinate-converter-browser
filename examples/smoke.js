@@ -1,5 +1,4 @@
 import { initProjRuntime } from '../src/proj-runtime.js';
-import { createProjApi } from '../src/proj-api.js';
 
 const logEl = document.querySelector('#log');
 
@@ -13,23 +12,20 @@ function log(msg) {
 async function main() {
   log('Starting PROJ runtime...');
 
-  const { worker } = await initProjRuntime({
-    dataUrl: '/assets/proj-data.tar.gz',
-    dataVersion: '2026-02-04',
+  const { api } = await initProjRuntime({
+    apiBaseUrl: '/api/proj-data',
     dataDirName: 'proj-data',
     wasmUrl: '/dist/proj_wasm.wasm',
     moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
     onProgress: (p) => {
-      if (p.stage === 'extract') {
+      if (p.stage === 'proj-db') {
         const total = p.total ? `/${p.total}` : '';
-        log(`Extracting... bytes ${p.bytes}${total}, entries ${p.entries}`);
+        log(`proj.db ${p.bytes}${total}`);
       }
     },
   });
 
-  const proj = createProjApi(worker);
-  const result = await proj.transform('EPSG:4326', 'EPSG:3857', 139.6917, 35.6895, 0);
-
+  const result = await api.transform('EPSG:4326', 'EPSG:3857', 139.6917, 35.6895, 0);
   log(`Result: ${JSON.stringify(result)}`);
 }
 

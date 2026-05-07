@@ -26,3 +26,9 @@ pnpm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# Hono server build artifact (regenerate via `npm run build:manifest`)
+server/manifest.json
+
+# pnpm local store
+.pnpm-store/

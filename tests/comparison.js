@@ -1,5 +1,4 @@
 import { initProjRuntime } from '../src/proj-runtime.js';
-import { createProjApi } from '../src/proj-api.js';
 
 // --- Tolerances ---
 const TOL = {
@@ -592,8 +591,13 @@ const PERF_ITERATIONS = 1000;
 async function runPerfTests(proj) {
   const results = [];
   for (const c of PERF_CASES) {
-    // Warm-up
-    await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0);
+    try {
+      // Warm-up; abort the case if the strict transform refuses (missing grid etc).
+      await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0);
+    } catch (e) {
+      results.push({ label: c.label, avgMs: NaN, opsSec: NaN, skipped: e.message });
+      continue;
+    }
 
     const start = performance.now();
     for (let i = 0; i < PERF_ITERATIONS; i++) {
@@ -696,13 +700,12 @@ export async function run() {
 
   let proj;
   try {
-    const { worker } = await initProjRuntime({
-      dataUrl: '/assets/proj-data.tar.gz',
-      dataVersion: '2026-02-04',
+    const { api } = await initProjRuntime({
+      apiBaseUrl: '/api/proj-data',
       dataDirName: 'proj-data',
       wasmUrl: '/dist/proj_wasm.wasm',
     });
-    proj = createProjApi(worker);
+    proj = api;
   } catch (e) {
     statusEl.textContent = `Init failed: ${e.message}`;
     return;

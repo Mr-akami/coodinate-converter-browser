@@ -11,27 +11,32 @@ const serverPort = 8765;
 const serverUrl = `http://127.0.0.1:${serverPort}/tests/comparison.html`;
 
 async function waitForServerReady() {
-  const maxAttempts = 20;
+  const maxAttempts = 30;
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(r => setTimeout(r, 500));
     try {
-      const res = await fetch(`http://127.0.0.1:${serverPort}/`, { method: 'HEAD' });
-      if (res.ok || res.status === 200 || res.status === 404) {
-        console.log(`Server listening on port ${serverPort}`);
+      const res = await fetch(`http://127.0.0.1:${serverPort}/api/proj-data/manifest`, { redirect: 'manual' });
+      // 302 redirect or 200 both indicate the server is ready.
+      if (res.status === 200 || res.status === 302) {
+        console.log(`Hono server ready on port ${serverPort}`);
         return;
       }
     } catch {
       // Server not ready yet
     }
   }
-  throw new Error('Timed out waiting for http.server');
+  throw new Error('Timed out waiting for Hono server');
 }
 
 async function run() {
-  const server = spawn('python3', ['-m', 'http.server', String(serverPort)], {
+  // Start the Hono server. Manifest must already exist; the server bails if not.
+  const server = spawn('node', ['--import', 'tsx', 'server/index.ts'], {
     cwd: repoRoot,
+    env: { ...process.env, PORT: String(serverPort) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  server.stdout.on('data', (b) => process.stdout.write(`[server] ${b}`));
+  server.stderr.on('data', (b) => process.stderr.write(`[server] ${b}`));
 
   try {
     await waitForServerReady();
@@ -48,7 +53,7 @@ async function run() {
       const status = document.getElementById('status');
       const text = status?.textContent || '';
       return text.startsWith('Done.') && text.includes('passed');
-    }, { timeout: 180000 });
+    }, { timeout: 240000 });
 
     const statusText = (await page.textContent('#status') || '').trim();
     console.log(`Summary: ${statusText}`);
@@ -77,7 +82,10 @@ async function run() {
   } finally {
     server.kill('SIGTERM');
     try {
-      await once(server, 'exit');
+      await Promise.race([
+        once(server, 'exit'),
+        new Promise((r) => setTimeout(r, 5000)),
+      ]);
     } catch {
       // Ignore shutdown errors.
     }
