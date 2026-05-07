@@ -219,8 +219,8 @@ emcc "${WRAPPER_SRC}" "${FINAL_LIBS[@]}" \
   -sFILESYSTEM=1 \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
-  -sEXPORTED_FUNCTIONS='["_pw_init","_pw_transform","_pw_clear_cache","_pw_cleanup","_malloc","_free"]' \
-  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","HEAPF64"]' \
+  -sEXPORTED_FUNCTIONS='["_pw_init","_pw_transform","_pw_grids_needed","_pw_strict_check","_pw_refresh_after_grid_write","_pw_clear_cache","_pw_cleanup","_malloc","_free"]' \
+  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","HEAPF64","HEAPU8","UTF8ToString"]' \
   -lworkerfs.js \
   -o "${DIST_DIR}/proj_wasm.js"
 

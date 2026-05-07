@@ -98,6 +98,21 @@
 
     <div id="checks">Loading...</div>
 
+    <div class="section-label">プリロード戦略</div>
+    <div class="row" style="gap:8px;align-items:flex-end">
+      <div style="flex:2">
+        <label for="strategy">配信モード</label>
+        <select id="strategy">
+          <option value="ondemand" selected>On-demand: 変換時に必要grid のみ取得</option>
+          <option value="all">All: 全 EPSG 用の grid を一括取得 (オフライン用途)</option>
+        </select>
+      </div>
+      <div style="flex:1">
+        <button id="preload-btn" type="button" style="margin-top:0">Run preload</button>
+      </div>
+    </div>
+    <div id="preload-status" style="margin-top:8px;font-size:0.85em;color:#8899aa"></div>
+
     <div class="section-label">変換テスト</div>
 
     <label for="preset">プリセット</label>
@@ -142,7 +157,6 @@
 
     <script type="module">
       import { initProjRuntime } from './src/proj-runtime.js';
-      import { createProjApi } from './src/proj-api.js';
 
       const btn = document.getElementById('btn');
       const statusEl = document.getElementById('status');
@@ -154,6 +168,9 @@
       const lonEl = document.getElementById('lon');
       const latEl = document.getElementById('lat');
       const hEl = document.getElementById('h');
+      const strategyEl = document.getElementById('strategy');
+      const preloadBtn = document.getElementById('preload-btn');
+      const preloadStatusEl = document.getElementById('preload-status');
 
       const PRESETS = {
         wgs84_to_jgd2011_9: {
@@ -185,6 +202,27 @@
 
       let proj = null;
 
+      async function refreshPreloadStatus(prefix) {
+        let suffix = '';
+        try {
+          const est = await navigator.storage.estimate();
+          const usedMB = (est.usage / 1024 / 1024).toFixed(1);
+          const quotaMB = (est.quota / 1024 / 1024).toFixed(0);
+          suffix = ` | OPFS ${usedMB} / ${quotaMB} MB`;
+        } catch {}
+        preloadStatusEl.textContent = (prefix || '') + suffix;
+      }
+
+      function describeFail(c) {
+        if (c.reason === 'missing_grid' || c.reason === 'fetch_failed') {
+          const names = (c.missing || []).map((m) => m.fullName || m.shortName).join(', ');
+          return `missing grid: ${names || c.reason}`;
+        }
+        if (c.reason === 'ballpark_only') return 'no non-ballpark op';
+        if (c.reason === 'hash_mismatch') return 'hash mismatch';
+        return c.reason || 'failed';
+      }
+
       presetEl.addEventListener('change', () => {
         const p = PRESETS[presetEl.value];
         if (!p) return;
@@ -200,13 +238,22 @@
       presetEl.dispatchEvent(new Event('change'));
 
       initProjRuntime({
-        dataUrl: '/assets/proj-data.tar.gz',
-        dataVersion: '2026-02-04',
+        apiBaseUrl: '/api/proj-data',
         dataDirName: 'proj-data',
         wasmUrl: '/dist/proj_wasm.wasm',
-      }).then(async ({ worker }) => {
-        proj = createProjApi(worker);
+        onProgress: (p) => {
+          if (p.stage === 'proj-db' && p.total) {
+            const pct = ((p.bytes / p.total) * 100).toFixed(0);
+            statusEl.textContent = `Downloading proj.db: ${pct}%`;
+          }
+        },
+      }).then(async ({ api, manifest }) => {
+        proj = api;
         btn.disabled = false;
+        preloadBtn.disabled = false;
+        const totalGrids = Object.keys(manifest.grids).length;
+        const totalSizeMB = Object.values(manifest.grids).reduce((s, g) => s + g.size, 0) / 1024 / 1024;
+        await refreshPreloadStatus(`manifest: ${totalGrids} grids (${totalSizeMB.toFixed(0)} MB total). version=${manifest.version}`);
         statusEl.textContent = 'Ready';
         await runChecks();
       }).catch((err) => {
@@ -217,10 +264,13 @@
       async function tryTransform(src, dst, x, y, z) {
         try {
           const r = await proj.transform(src, dst, x, y, z);
-          if (isNaN(r.x) || r.x === Infinity) return null;
-          return r;
-        } catch {
-          return null;
+          if (isNaN(r.x) || r.x === Infinity) return { ok: false, reason: 'NaN' };
+          return { ok: true, ...r };
+        } catch (e) {
+          if (e && e.name === 'MissingGridError') {
+            return { ok: false, reason: e.reason, missing: e.missingGrids };
+          }
+          return { ok: false, reason: e && e.message || 'error' };
         }
       }
 
@@ -228,39 +278,47 @@
         checksEl.innerHTML = 'Checking...';
         const checks = [];
 
-        // 1. JGD2011 basic
+        // 1. JGD2011 basic projection (no datum grid needed)
         const c1 = await tryTransform('EPSG:4326', 'EPSG:6677', 139.7671, 35.6812, 0);
         checks.push({
           label: 'JGD2011 平面直角IX系',
-          ok: c1 !== null,
-          detail: c1 ? `(${c1.x.toFixed(3)}, ${c1.y.toFixed(3)})` : '',
+          ok: c1.ok,
+          detail: c1.ok ? `(${c1.x.toFixed(3)}, ${c1.y.toFixed(3)})` : describeFail(c1),
         });
 
-        // 2. JGD2000 → JGD2011 (grid-based)
+        // 2. JGD2000 → JGD2011 (requires touhokutaiheiyouoki2011 — not in bundle)
         const c2 = await tryTransform('EPSG:4612', 'EPSG:6668', 139.7671, 35.6812, 0);
-        const hasGrid = c2 !== null &&
+        const hasGrid = c2.ok &&
           Math.abs(c2.x - 139.7671) < 0.01 && Math.abs(c2.y - 35.6812) < 0.01;
         checks.push({
           label: 'JGD2000→JGD2011 グリッド変換',
           ok: hasGrid,
-          detail: c2 ? `(${c2.x.toFixed(8)}, ${c2.y.toFixed(8)})` : '',
+          detail: c2.ok ? `(${c2.x.toFixed(8)}, ${c2.y.toFixed(8)})` : describeFail(c2),
         });
 
         // 3. Geoid model (gsigeo2011) via CRS-to-CRS
         const c3 = await tryTransform('EPSG:6667', 'EPSG:6697', 139.7671, 35.6812, 76.0);
-        const geoidOk = c3 !== null && Math.abs(c3.z - 76.0) > 0.1;
+        const geoidOk = c3.ok && Math.abs(c3.z - 76.0) > 0.1;
         checks.push({
           label: 'ジオイドモデル (GSIGEO2011)',
           ok: geoidOk,
-          detail: c3 ? `z=${c3.z.toFixed(3)}` : 'transform failed',
+          detail: c3.ok ? `z=${c3.z.toFixed(3)}` : describeFail(c3),
         });
 
-        // 4. Tokyo datum → JGD2011
+        // 4. Tokyo datum → JGD2011 (requires tky2jgd — not in bundle)
         const c4 = await tryTransform('EPSG:4301', 'EPSG:6668', 139.7671, 35.6812, 0);
         checks.push({
           label: '旧日本測地系→JGD2011',
-          ok: c4 !== null,
-          detail: c4 ? `(${c4.x.toFixed(8)}, ${c4.y.toFixed(8)})` : '',
+          ok: c4.ok,
+          detail: c4.ok ? `(${c4.x.toFixed(8)}, ${c4.y.toFixed(8)})` : describeFail(c4),
+        });
+
+        // 5. Belgium NTv2 grid (in bundle)
+        const c5 = await tryTransform('EPSG:31370', 'EPSG:4326', 152000, 170000, 0);
+        checks.push({
+          label: 'Belgium NTv2 (BD72→WGS84)',
+          ok: c5.ok && Math.abs(c5.x - 4.4) < 0.5 && Math.abs(c5.y - 50.85) < 0.5,
+          detail: c5.ok ? `(${c5.x.toFixed(7)}, ${c5.y.toFixed(7)})` : describeFail(c5),
         });
 
         // Render
@@ -272,6 +330,41 @@
           return `${c.label} ${badge}${detail}`;
         }).join('<br>');
       }
+
+      preloadBtn.disabled = true;
+      preloadBtn.addEventListener('click', async () => {
+        if (!proj) return;
+        const mode = strategyEl.value;
+        preloadBtn.disabled = true;
+        try {
+          if (mode === 'all') {
+            preloadStatusEl.textContent = 'Pre-fetching ALL grids... this may take a while.';
+            const result = await proj.preloadGrids('all', {
+              onProgress: ({ done, total }) => {
+                preloadStatusEl.textContent = `Pre-fetching... ${done}/${total} grids`;
+              },
+            });
+            await refreshPreloadStatus(`Pre-fetched ${result.fetched} grids. All persisted to OPFS.`);
+          } else {
+            // On-demand: pre-fetch only what the preset table needs.
+            const pairs = Object.values(PRESETS).map((p) => ({
+              src: p.src, dst: p.dst, x: p.lon, y: p.lat,
+            }));
+            preloadStatusEl.textContent = 'Computing required grids for preset CRS pairs...';
+            const result = await proj.preloadGrids(pairs, {
+              onProgress: ({ done, total }) => {
+                preloadStatusEl.textContent = `Pre-fetching... ${done}/${total} grids`;
+              },
+            });
+            await refreshPreloadStatus(`Pre-fetched ${result.fetched} grids for the preset CRS pairs.`);
+          }
+          await runChecks();
+        } catch (e) {
+          preloadStatusEl.textContent = `Preload failed: ${e.message || e}`;
+        } finally {
+          preloadBtn.disabled = false;
+        }
+      });
 
       btn.addEventListener('click', async () => {
         const src = srcEl.value.trim();
@@ -299,7 +392,16 @@
             `      y=${r.y}\n` +
             `      z=${r.z}`;
         } catch (e) {
-          resultEl.textContent = `Error: ${e.message || e}`;
+          if (e && e.name === 'MissingGridError') {
+            const names = (e.missingGrids || []).map((m) => m.fullName || m.shortName).join('\n  ');
+            resultEl.textContent = `MissingGridError (${e.reason})\n` +
+              `Required grids not available:\n  ${names || '(unknown)'}\n\n` +
+              `This is intentional: strict mode prevents silent fallback to a less-accurate ` +
+              `Helmert/ballpark transformation. Add the grid file to proj-data and rebuild ` +
+              `the manifest to fix.`;
+          } else {
+            resultEl.textContent = `Error: ${e.message || e}`;
+          }
         } finally {
           btn.disabled = false;
         }

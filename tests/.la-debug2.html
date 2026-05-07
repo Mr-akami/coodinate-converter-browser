@@ -1,0 +1,38 @@
+<!doctype html>
+<html><body><pre id=log></pre><script type="module">
+import { initProjRuntime } from '/src/proj-runtime.js';
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; console.log(m); };
+const { worker, api, manifest } = await initProjRuntime({
+  apiBaseUrl: '/api/proj-data',
+  wasmUrl: '/dist/proj_wasm.wasm',
+  dataDirName: 'proj-data-la-debug2',
+});
+log('init done');
+
+let nextId = 1000;
+function rpc(msg) { return new Promise((resolve, reject) => {
+  const id = nextId++;
+  const h = (e) => { if (e.data.id !== id) return; worker.removeEventListener('message', h);
+    if (e.data.type === 'error') reject(new Error(e.data.error)); else resolve(e.data); };
+  worker.addEventListener('message', h);
+  worker.postMessage({ ...msg, id });
+}); }
+
+const src = 'EPSG:4267', dst = 'EPSG:4326';
+const x = -118.244606, y = 33.942513;
+
+log('=== first call (lazy fetch) ===');
+const r1 = await api.transform(src, dst, x, y, 0);
+log(`  result: (${r1.x.toFixed(10)}, ${r1.y.toFixed(10)})`);
+
+log('\n=== second call (cache hit) ===');
+const r2 = await api.transform(src, dst, x, y, 0);
+log(`  result: (${r2.x.toFixed(10)}, ${r2.y.toFixed(10)})`);
+
+log('\n=== inspect prepare again ===');
+const prep = await rpc({ type: 'prepare', src, dst, x, y });
+log('  grids: ' + JSON.stringify(prep.grids, null, 2));
+
+log('\nexpected (from cs2cs reference): (-118.2446060991, 33.9425132395)');
+log('DONE');
+</script></body></html>
