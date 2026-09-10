@@ -15,9 +15,17 @@ const TRANSFORM_MISSING_GRID = 5;
 const TRANSFORM_BALLPARK_ONLY = 6;
 
 /**
- * @param {{moduleUrl: string, wasmUrl?: string, memfsPath: string, projDbBytes: Uint8Array}} config
+ * `projDbBytes` is the browser path: the database is copied into MEMFS because
+ * that is the only filesystem available there. `nodeDataDir` is the Node path:
+ * the real directory is mounted, so PROJ reads proj.db and every grid straight
+ * off the disk they already sit on, with nothing copied and nothing to fetch.
+ *
+ * @param {{moduleUrl: string, wasmUrl?: string, memfsPath: string,
+ *          projDbBytes?: Uint8Array, nodeDataDir?: string}} config
  */
-export async function createProjModule({ moduleUrl, wasmUrl, memfsPath, projDbBytes }) {
+export async function createProjModule({
+  moduleUrl, wasmUrl, memfsPath, projDbBytes, nodeDataDir,
+}) {
   const loaded = await import(moduleUrl);
   const createModule = loaded.default || loaded;
 
@@ -26,7 +34,11 @@ export async function createProjModule({ moduleUrl, wasmUrl, memfsPath, projDbBy
   });
 
   ensureMemfsDir(Module.FS, memfsPath);
-  Module.FS.writeFile(`${memfsPath}/proj.db`, projDbBytes);
+  if (nodeDataDir) {
+    Module.FS.mount(Module.NODEFS, { root: nodeDataDir }, memfsPath);
+  } else {
+    Module.FS.writeFile(`${memfsPath}/proj.db`, projDbBytes);
+  }
 
   const rc = Module.ccall('pw_init', 'number', ['string'], [memfsPath]);
   if (rc !== 0) throw new Error(`pw_init failed: ${rc}`);

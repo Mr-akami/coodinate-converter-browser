@@ -32,7 +32,8 @@
     ".": "./src/proj-runtime.js",
     "./worker": "./src/proj-worker.js",
     "./wasm": "./dist/proj_wasm.wasm",
-    "./testing": "./src/testing.js"
+    "./testing": "./src/testing.js",
+    "./node": "./src/node.js"
   },
   "files": [
     "src/**/*.js",
