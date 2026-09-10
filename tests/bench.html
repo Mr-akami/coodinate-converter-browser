@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>proj-wasm bench</title>
+  </head>
+  <body>
+    <pre id="out">running...</pre>
+    <script type="module">
+      import { initProjRuntime } from '../src/proj-runtime.js';
+
+      const out = document.getElementById('out');
+      const CASES = [
+        { label: 'proj:4326->6677', src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.7671, y: 35.6812, z: 0 },
+        { label: 'proj:4326->32618', src: 'EPSG:4326', dst: 'EPSG:32618', x: -74.006, y: 40.7128, z: 0 },
+        { label: 'datum:4301->6668', src: 'EPSG:4301', dst: 'EPSG:6668', x: 139.7671, y: 35.6812, z: 0 },
+        { label: 'geoid:6667->6697', src: 'EPSG:6667', dst: 'EPSG:6697', x: 139.7671, y: 35.6812, z: 76 },
+        { label: 'ntv2:31370->4326', src: 'EPSG:31370', dst: 'EPSG:4326', x: 152000, y: 170000, z: 0 },
+      ];
+      const ITER = 2000;
+
+      async function main() {
+        const t0 = performance.now();
+        const { api } = await initProjRuntime({
+          apiBaseUrl: '/api/proj-data',
+          dataDirName: `bench-${Date.now()}`,
+          wasmUrl: '/dist/proj_wasm.wasm',
+          moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
+        });
+        const initMs = performance.now() - t0;
+
+        const rows = [];
+        for (const c of CASES) {
+          let warmOk = true;
+          const tw0 = performance.now();
+          try {
+            await api.transform(c.src, c.dst, c.x, c.y, c.z);
+          } catch (e) {
+            warmOk = false;
+            rows.push({ label: c.label, error: String(e.message || e) });
+            continue;
+          }
+          const coldMs = performance.now() - tw0;
+
+          const t1 = performance.now();
+          for (let i = 0; i < ITER; i++) {
+            await api.transform(c.src, c.dst, c.x, c.y, c.z);
+          }
+          const totalMs = performance.now() - t1;
+          rows.push({
+            label: c.label,
+            coldMs: +coldMs.toFixed(1),
+            usPerOp: +((totalMs * 1000) / ITER).toFixed(1),
+            opsPerSec: Math.round((ITER / totalMs) * 1000),
+          });
+        }
+
+        let heapMb = null;
+        try {
+          heapMb = +(performance.memory.usedJSHeapSize / 1048576).toFixed(1);
+        } catch {}
+
+        const result = { initMs: +initMs.toFixed(0), iterations: ITER, heapMb, rows };
+        out.textContent = 'BENCH_JSON=' + JSON.stringify(result);
+      }
+
+      main().catch((e) => {
+        out.textContent = 'BENCH_ERROR=' + (e && e.stack ? e.stack : String(e));
+      });
+    </script>
+  </body>
+</html>

@@ -32,3 +32,6 @@ server/manifest.json
 
 # pnpm local store
 .pnpm-store/
+
+# Large external proj-data checkout (see README for how to obtain)
+third_party/sc-proj-data/
