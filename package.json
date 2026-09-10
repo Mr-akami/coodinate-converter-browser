@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:lib": "tsc -p tsconfig.json",
     "test:unit": "vitest run",
+    "test:native": "bash scripts/build-proj-native.sh && ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 build/native-tests/proj_wasm_tests",
     "test:browser": "node tests/run-browser-check.mjs"
   },
   "packageManager": "pnpm@9.15.0",

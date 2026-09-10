@@ -46,32 +46,33 @@ async function handleInit(msg) {
 
 function handlePrepare(msg) {
   const { src, dst, x, y, discardMissing = 0 } = msg;
-  const cap = 64 * 1024;
-  const buf = Module._malloc(cap);
-  if (!buf) throw new Error('malloc failed');
+  const statusPtr = Module._malloc(4);
+  if (!statusPtr) throw new Error('malloc failed');
+  let jsonPtr = 0;
   try {
     const xv = Number.isFinite(x) ? x : NaN;
     const yv = Number.isFinite(y) ? y : NaN;
-    const written = Module.ccall(
+    jsonPtr = Module.ccall(
       'pw_grids_needed',
       'number',
-      ['string', 'string', 'number', 'number', 'number', 'number', 'number'],
-      [src, dst, xv, yv, discardMissing ? 1 : 0, buf, cap],
+      ['string', 'string', 'number', 'number', 'number', 'number'],
+      [src, dst, xv, yv, discardMissing ? 1 : 0, statusPtr],
     );
-    if (written < 0) {
-      // -1 arg, -2 crs, -3 ballpark_only, -4 overflow
-      if (written === -3) {
+    const status = Module.HEAP32[statusPtr >> 2];
+    if (status < 0) {
+      // -1 arg, -2 crs, -3 ballpark_only
+      if (status === -3) {
         const err = new Error('no non-ballpark op available');
         err.errorKind = 'ballpark_only';
         throw err;
       }
-      throw new Error(`pw_grids_needed failed: ${written}`);
+      throw new Error(`pw_grids_needed failed: ${status}`);
     }
-    const json = Module.UTF8ToString(buf, written);
-    const grids = JSON.parse(json);
+    const grids = JSON.parse(Module.UTF8ToString(jsonPtr));
     return { grids };
   } finally {
-    Module._free(buf);
+    if (jsonPtr) Module._free(jsonPtr);
+    Module._free(statusPtr);
   }
 }
 
@@ -86,9 +87,9 @@ function handleAddGrids(msg) {
     mountedGrids.add(g.name);
   }
 
-  // Invalidate all PROJ caches so the new files are picked up.
-  // Strategy 1: also recreate the context (covers DatabaseContext::cacheGridInfo_).
-  const rc = Module.ccall('pw_refresh_after_grid_write', 'number', ['number'], [1]);
+  // Invalidate all PROJ caches so the new files are picked up; this also
+  // recreates the context (covers DatabaseContext::cacheGridInfo_).
+  const rc = Module.ccall('pw_refresh_after_grid_write', 'number', [], []);
   if (rc !== 0) throw new Error(`pw_refresh_after_grid_write failed: ${rc}`);
   strictCheckedOk.clear();
   return { added: grids.length };
@@ -138,10 +139,12 @@ function handleTransform(msg) {
     Module.HEAPF64[base + 1] = y;
     Module.HEAPF64[base + 2] = z || 0;
 
+    // allow_ballpark=1 keeps this phase's browser behaviour: the strict
+    // pre-check above owns the missing-grid decision.
     const rc = Module.ccall(
       'pw_transform', 'number',
-      ['string', 'string', 'number', 'number', 'number'],
-      [src, dst, ptr, ptr + 8, ptr + 16],
+      ['string', 'string', 'number', 'number', 'number', 'number'],
+      [src, dst, 1, ptr, ptr + 8, ptr + 16],
     );
 
     if (rc === 5) {

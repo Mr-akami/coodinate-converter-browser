@@ -23,6 +23,7 @@
           unzip
           curl
           sqlite
+          libtiff
           gnused
           gnutar
           gzip
