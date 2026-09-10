@@ -1,13 +1,11 @@
 /*
- * CT-API — the public surface the pages already use.
- * Source: order.md Constraints ("Do not change the public API surface or
- * index.html behaviour"), with the call sites in index.html:240-262,342-360,
- * tests/comparison.js:49, tests/bench.html:37 and examples/smoke.js:28.
+ * The public surface.
  *
- * The API is a pass-through to the worker, so what matters here is that each
- * call reaches the worker with the arguments it needs — including the
- * AbortSignal and the progress callback, which are easy to accept and then
- * drop.
+ * The API is a thin pass-through to the worker, so what matters here is that
+ * each call reaches the worker with the arguments it needs — the AbortSignal
+ * and the transfer list are easy to accept and then quietly drop — and that
+ * the strict default is actually the default rather than a documented
+ * intention.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -16,22 +14,37 @@ import { createProjApi } from '../../src/proj-api.js';
 
 function fakeRpc(reply: Record<string, unknown> = {}) {
   const calls: Array<{ message: any; options: any }> = [];
+  let disposed = false;
   return {
     calls,
+    get disposed() {
+      return disposed;
+    },
     request(message: any, options: any) {
       calls.push({ message, options });
       return Promise.resolve(reply);
     },
+    dispose() {
+      disposed = true;
+    },
   };
 }
 
-const manifest = { version: 'v1', grids: { 'a.tif': { size: 1, sha256: 'x' } } };
+const manifest = { version: 'v1' };
 
 describe('createProjApi', () => {
-  it('exposes the Manifest it was built with', () => {
+  it('reports the Data Version it was built against', () => {
     const api = createProjApi(fakeRpc(), manifest);
 
-    expect(api.manifest).toBe(manifest);
+    expect(api.dataVersion).toBe('v1');
+  });
+
+  it('does not expose the worker, the Manifest or the internals', () => {
+    const api = createProjApi(fakeRpc(), manifest);
+
+    expect(Object.keys(api).sort()).toEqual([
+      'dataVersion', 'describe', 'dispose', 'prepare', 'transform', 'transformMany',
+    ]);
   });
 
   it('transforms through the worker and returns only the coordinate', async () => {
@@ -48,8 +61,19 @@ describe('createProjApi', () => {
       x: 139.7,
       y: 35.6,
       z: 10,
-      strict: false,
+      allowBallpark: false,
     });
+  });
+
+  it('refuses a ballpark answer unless the caller asks for one', async () => {
+    const rpc = fakeRpc({ x: 1, y: 2, z: 3 });
+    const api = createProjApi(rpc, manifest);
+
+    await api.transform('EPSG:4326', 'EPSG:6677', 1, 2);
+    expect(rpc.calls[0]!.message.allowBallpark).toBe(false);
+
+    await api.transform('EPSG:4326', 'EPSG:6677', 1, 2, 0, { allowBallpark: true });
+    expect(rpc.calls[1]!.message.allowBallpark).toBe(true);
   });
 
   it('defaults the height to zero', async () => {
@@ -61,17 +85,13 @@ describe('createProjApi', () => {
     expect(rpc.calls[0]!.message.z).toBe(0);
   });
 
-  it('forwards strict mode and the AbortSignal', async () => {
+  it('forwards the AbortSignal', async () => {
     const rpc = fakeRpc({ x: 1, y: 2, z: 3 });
     const api = createProjApi(rpc, manifest);
     const controller = new AbortController();
 
-    await api.transform('EPSG:4326', 'EPSG:6677', 1, 2, 0, {
-      strict: true,
-      signal: controller.signal,
-    });
+    await api.transform('EPSG:4326', 'EPSG:6677', 1, 2, 0, { signal: controller.signal });
 
-    expect(rpc.calls[0]!.message.strict).toBe(true);
     expect(rpc.calls[0]!.options.signal).toBe(controller.signal);
   });
 
@@ -83,35 +103,81 @@ describe('createProjApi', () => {
     expect(rpc.calls).toEqual([]);
   });
 
-  it('preloads grids with the progress callback and the AbortSignal attached', async () => {
-    const rpc = fakeRpc({ type: 'preloaded', fetched: 3 });
+  it('sends a batch as one transferred buffer and returns the result', async () => {
+    const out = new Float64Array([9, 8, 7]);
+    const rpc = fakeRpc({ type: 'resultMany', xyz: out.buffer });
     const api = createProjApi(rpc, manifest);
-    const controller = new AbortController();
-    const onProgress = () => undefined;
+    const input = new Float64Array([1, 2, 3]);
 
-    const result = await api.preloadGrids('all', { onProgress, signal: controller.signal });
+    const result = await api.transformMany('EPSG:4326', 'EPSG:6677', input);
 
-    expect(result).toEqual({ fetched: 3 });
-    expect(rpc.calls[0]!.message).toEqual({ type: 'preloadGrids', spec: 'all' });
-    expect(rpc.calls[0]!.options).toEqual({ onProgress, signal: controller.signal });
+    expect(Array.from(result)).toEqual([9, 8, 7]);
+    expect(rpc.calls).toHaveLength(1);
+    expect(rpc.calls[0]!.message.type).toBe('transformMany');
+    expect(rpc.calls[0]!.message.transfer).toEqual([input.buffer]);
   });
 
-  it('sends CRS pairs through unchanged', async () => {
-    const rpc = fakeRpc({ fetched: 0 });
+  it('rejects a batch whose length is not a whole number of points', async () => {
+    const rpc = fakeRpc();
     const api = createProjApi(rpc, manifest);
-    const pairs = [{ src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.7, y: 35.6 }];
 
-    await api.preloadGrids(pairs);
-
-    expect(rpc.calls[0]!.message.spec).toBe(pairs);
+    await expect(
+      api.transformMany('EPSG:4326', 'EPSG:6677', new Float64Array([1, 2, 3, 4])),
+    ).rejects.toThrow(/multiple of 3/);
+    expect(rpc.calls).toEqual([]);
   });
 
-  it('clears the prepare cache in the worker that owns it', async () => {
-    const rpc = fakeRpc({ type: 'prepareCacheCleared' });
+  it('rejects a batch that is not a Float64Array', async () => {
+    const rpc = fakeRpc();
     const api = createProjApi(rpc, manifest);
 
-    await api.clearPrepareCache();
+    await expect(
+      api.transformMany('EPSG:4326', 'EPSG:6677', [1, 2, 3] as unknown as Float64Array),
+    ).rejects.toThrow(/Float64Array/);
+    expect(rpc.calls).toEqual([]);
+  });
 
-    expect(rpc.calls[0]!.message).toEqual({ type: 'clearPrepareCache' });
+  it('returns an empty batch without troubling the worker', async () => {
+    const rpc = fakeRpc();
+    const api = createProjApi(rpc, manifest);
+
+    const result = await api.transformMany('EPSG:4326', 'EPSG:6677', new Float64Array(0));
+
+    expect(result.length).toBe(0);
+    expect(rpc.calls).toEqual([]);
+  });
+
+  it('prepares the grids one CRS pair at a point needs', async () => {
+    const rpc = fakeRpc({ type: 'preloaded', fetched: 2 });
+    const api = createProjApi(rpc, manifest);
+
+    await api.prepare('EPSG:4326', 'EPSG:6677', { x: 139.7, y: 35.6 });
+
+    expect(rpc.calls[0]!.message).toEqual({
+      type: 'preloadGrids',
+      spec: [{ src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.7, y: 35.6 }],
+    });
+  });
+
+  it('describes the operation, allowing ballpark so a ballpark can be reported', async () => {
+    const info = { name: 'op', accuracy: 1, ballpark: false, grids: [] };
+    const rpc = fakeRpc({ type: 'described', info });
+    const api = createProjApi(rpc, manifest);
+
+    const result = await api.describe('EPSG:4326', 'EPSG:6677', { x: 1, y: 2 });
+
+    expect(result).toBe(info);
+    // describe answers "what would happen", so refusing to look at a ballpark
+    // would make the one case worth asking about unreportable.
+    expect(rpc.calls[0]!.message.allowBallpark).toBe(true);
+  });
+
+  it('disposes the transport underneath it', () => {
+    const rpc = fakeRpc();
+    const api = createProjApi(rpc, manifest);
+
+    api.dispose();
+
+    expect(rpc.disposed).toBe(true);
   });
 });

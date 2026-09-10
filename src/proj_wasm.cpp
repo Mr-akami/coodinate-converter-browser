@@ -579,6 +579,91 @@ char* pw_grids_needed(const char* src, const char* dst, double x, double y,
   return result;
 }
 
+/*
+ * pw_describe: report the operation a transform would actually use, so callers
+ * can show accuracy and grid requirements without running a transform and
+ * without a second guess at operation selection. It resolves through the same
+ * cache as pw_transform, so what it describes is what the next call runs.
+ */
+char* pw_describe(const char* src, const char* dst, double x, double y,
+                  int allow_ballpark, int* out_status) {
+  if (!out_status) return nullptr;
+  *out_status = -1;
+  if (!src || !dst) return nullptr;
+
+  WrapperState& s = state();
+  if (!s.ctx) return nullptr;
+
+  /* Run the point through, then ask PROJ which operation it actually used.
+     prepare_operation hands back a crs_to_crs object, which is a container of
+     alternatives rather than a coordinate operation: asking it for a name or
+     an accuracy yields nothing. Only after a transform does PROJ know which
+     alternative applied at this point, which is also the honest answer to
+     "what would a transform here do". */
+  double px = x;
+  double py = y;
+  double pz = 0.0;
+  const bool has_coord = !std::isnan(x) && !std::isnan(y);
+  if (has_coord) {
+    const int code = transform_point(src, dst, allow_ballpark != 0, &px, &py, &pz);
+    if (code != 0 && code != 4) {
+      *out_status = -2;
+      return nullptr;
+    }
+  } else {
+    int code = 0;
+    if (!prepare_operation(src, dst, allow_ballpark != 0, &code)) {
+      *out_status = -2;
+      return nullptr;
+    }
+  }
+
+  const CachedOperation* entry = &state().cached;
+  if (!entry->op) {
+    *out_status = -2;
+    return nullptr;
+  }
+
+  const PjPtr used(proj_trans_get_last_used_operation(entry->op.get()));
+  PJ* described = used ? used.get() : entry->op.get();
+
+  const char* name = proj_get_name(described);
+  const double accuracy = proj_coordoperation_get_accuracy(s.ctx.get(), described);
+  const int ballpark =
+      proj_coordoperation_has_ballpark_transformation(s.ctx.get(), described);
+
+  std::string json = "{\"name\":";
+  append_json_string(&json, name ? name : "");
+  json += ",\"accuracy\":";
+  if (accuracy < 0.0) {
+    json += "null";
+  } else {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.6g", accuracy);
+    json += buffer;
+  }
+  json += ",\"ballpark\":";
+  json += (ballpark == 1) ? "true" : "false";
+  json += ",\"grids\":";
+
+  /* Reuse the enumeration so the grid shape matches pw_grids_needed exactly;
+     a caller comparing the two should never see two spellings of one grid. */
+  int grid_status = 0;
+  char* grids = pw_grids_needed(src, dst, x, y, 0, &grid_status);
+  if (grids && grid_status == 0) {
+    json += grids;
+  } else {
+    json += "[]";
+  }
+  std::free(grids);
+  json.push_back('}');
+
+  char* result = duplicate(json);
+  if (!result) return nullptr;
+  *out_status = 0;
+  return result;
+}
+
 int pw_strict_check(const char* src, const char* dst, double x, double y) {
   WrapperState& s = state();
   if (!src || !dst) return -1;

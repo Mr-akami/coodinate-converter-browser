@@ -7,7 +7,7 @@
   <body>
     <pre id="out">running...</pre>
     <script type="module">
-      import { initProjRuntime } from '../src/proj-runtime.js';
+      import { createProj } from '../src/proj-runtime.js';
 
       const out = document.getElementById('out');
       const CASES = [
@@ -21,8 +21,8 @@
 
       async function main() {
         const t0 = performance.now();
-        const { api } = await initProjRuntime({
-          apiBaseUrl: '/api/proj-data',
+        const api = await createProj({
+          dataBaseUrl: '/api/proj-data',
           dataDirName: `bench-${Date.now()}`,
           wasmUrl: '/dist/proj_wasm.wasm',
           moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,
@@ -34,7 +34,7 @@
           let warmOk = true;
           const tw0 = performance.now();
           try {
-            await api.transform(c.src, c.dst, c.x, c.y, c.z);
+            await api.transform(c.src, c.dst, c.x, c.y, c.z, { allowBallpark: true });
           } catch (e) {
             warmOk = false;
             rows.push({ label: c.label, error: String(e.message || e) });
@@ -44,7 +44,7 @@
 
           const t1 = performance.now();
           for (let i = 0; i < ITER; i++) {
-            await api.transform(c.src, c.dst, c.x, c.y, c.z);
+            await api.transform(c.src, c.dst, c.x, c.y, c.z, { allowBallpark: true });
           }
           const totalMs = performance.now() - t1;
           rows.push({

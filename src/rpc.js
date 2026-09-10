@@ -95,9 +95,24 @@ export function createRpc(port) {
       }
 
       pending.set(id, { resolve, reject, detach, onProgress });
-      port.postMessage({ ...message, id });
+      // `transfer` names buffers to move rather than copy; it is a delivery
+      // detail, so it never reaches the worker as part of the message.
+      const { transfer, ...body } = message;
+      port.postMessage({ ...body, id }, transfer || []);
     });
   }
 
-  return { request };
+  /*
+   * Shut the transport down deliberately. Everything still in flight is
+   * rejected the same way a worker crash rejects it, so a caller never waits
+   * on a port nobody is listening to any more.
+   */
+  function disposeTransport() {
+    if (!disposedWith) {
+      dispose(new ProjWorkerError('proj worker disposed'));
+    }
+    if (typeof port.terminate === 'function') port.terminate();
+  }
+
+  return { request, dispose: disposeTransport };
 }

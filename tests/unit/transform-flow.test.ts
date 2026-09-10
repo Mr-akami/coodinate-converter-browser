@@ -107,14 +107,14 @@ function harness(options: HarnessOptions = {}) {
 
 const point = { src: 'EPSG:4326', dst: 'EPSG:6677', x: 139.7, y: 35.6, z: 0 };
 
-describe('createTransformFlow — default mode', () => {
+describe('createTransformFlow — allowBallpark', () => {
   it('fetches the grids the operation needs, refreshes once, then transforms', async () => {
     const { log, flow } = harness({
       enumerate: () => [unavailableGrid('a.tif'), unavailableGrid('b.tif')],
       manifestGrids: ['a.tif', 'b.tif'],
     });
 
-    const result = await flow.transform({ ...point });
+    const result = await flow.transform({ ...point, allowBallpark: true });
 
     expect(log).toEqual([
       'gridsNeeded:0:EPSG:4326|EPSG:6677|139.7|35.6',
@@ -134,7 +134,7 @@ describe('createTransformFlow — default mode', () => {
       manifestGrids: ['shipped.tif'],
     });
 
-    await flow.transform({ ...point });
+    await flow.transform({ ...point, allowBallpark: true });
 
     expect(log).toEqual([
       'gridsNeeded:0:EPSG:4326|EPSG:6677|139.7|35.6',
@@ -152,7 +152,7 @@ describe('createTransformFlow — default mode', () => {
       failingGrids: ['a.tif'],
     });
 
-    await flow.transform({ ...point });
+    await flow.transform({ ...point, allowBallpark: true });
 
     expect(log).toEqual([
       'gridsNeeded:0:EPSG:4326|EPSG:6677|139.7|35.6',
@@ -168,7 +168,7 @@ describe('createTransformFlow — default mode', () => {
       mountedGrids: ['a.tif'],
     });
 
-    await flow.transform({ ...point });
+    await flow.transform({ ...point, allowBallpark: true });
 
     expect(log.filter((entry) => entry.startsWith('ensure:'))).toEqual([]);
     expect(log).not.toContain('refresh');
@@ -193,7 +193,7 @@ describe('createTransformFlow — default mode', () => {
       },
     });
 
-    await flow.transform({ ...point });
+    await flow.transform({ ...point, allowBallpark: true });
 
     expect(log).toEqual([
       'gridsNeeded:0:EPSG:4326|EPSG:6677|139.7|35.6',
@@ -209,7 +209,7 @@ describe('createTransformFlow — strict mode', () => {
       manifestGrids: [],
     });
 
-    const error = await flow.transform({ ...point, strict: true }).catch((e: unknown) => e);
+    const error = await flow.transform({ ...point }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(MissingGridError);
     expect((error as MissingGridError).reason).toBe('missing_grid');
@@ -224,7 +224,7 @@ describe('createTransformFlow — strict mode', () => {
       failingGrids: ['a.tif'],
     });
 
-    const error = await flow.transform({ ...point, strict: true }).catch((e: unknown) => e);
+    const error = await flow.transform({ ...point }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(MissingGridError);
     expect((error as MissingGridError).reason).toBe('fetch_failed');
@@ -239,7 +239,7 @@ describe('createTransformFlow — strict mode', () => {
       strictCheck: () => 0,
     });
 
-    const error = await flow.transform({ ...point, strict: true }).catch((e: unknown) => e);
+    const error = await flow.transform({ ...point }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(MissingGridError);
     expect((error as MissingGridError).reason).toBe('missing_grid');
@@ -258,7 +258,7 @@ describe('createTransformFlow — strict mode', () => {
       strictCheck: () => 0,
     });
 
-    const error = await flow.transform({ ...point, strict: true }).catch((e: unknown) => e);
+    const error = await flow.transform({ ...point }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(MissingGridError);
     expect((error as MissingGridError).reason).toBe('ballpark_only');
@@ -272,8 +272,8 @@ describe('createTransformFlow — strict mode', () => {
       manifestGrids: ['a.tif', 'b.tif'],
     });
 
-    await flow.transform({ ...point, strict: true });
-    await flow.transform({ ...point, strict: true });
+    await flow.transform({ ...point });
+    await flow.transform({ ...point });
 
     expect(log.filter((entry) => entry.startsWith('strictCheck:'))).toHaveLength(1);
 

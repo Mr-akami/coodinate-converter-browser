@@ -75,6 +75,19 @@ int pw_transform(const char* src, const char* dst, int allow_ballpark,
  * failure that belongs to the CRS pair rather than to the point (-2, -3, -5,
  * -6).
  */
+/*
+ * pw_describe: JSON describing the operation that a transform between src and
+ * dst would use at (x,y): its name, its PROJ accuracy in metres (-1 when PROJ
+ * declares none), whether it is a ballpark, and the grids it needs with their
+ * availability. Pass NaN for x or y to describe the pair without a point.
+ *
+ * Returns a malloc'd NUL-terminated string the caller frees, or NULL. Sets
+ * *out_status to 0 on success, -1 for a bad argument, -2 when the CRS cannot
+ * be resolved.
+ */
+char* pw_describe(const char* src, const char* dst, double x, double y,
+                  int allow_ballpark, int* out_status);
+
 int pw_transform_many(const char* src, const char* dst, int allow_ballpark,
                       double* xyz, int count);
 

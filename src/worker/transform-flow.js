@@ -3,9 +3,12 @@
  *
  * Order matters here: which grids the operation needs, which of those the
  * Data Origin ships, when the strict check runs and when PROJ's caches are
- * invalidated together decide what the browser suite observes. The default
- * mode matches cs2cs — an unavailable grid falls through to the ballpark
- * operation — while strict mode refuses to answer instead.
+ * invalidated together decide what the browser suite observes.
+ *
+ * Refusing is the default. A caller that asks for a transform and gets a
+ * number back should be able to trust it, and a ballpark result can be tens of
+ * metres out with nothing in the return value to say so. `allowBallpark` opts
+ * into cs2cs behaviour, where an unavailable grid falls through.
  */
 
 import { MissingGridError } from '../errors.js';
@@ -144,11 +147,13 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     );
   }
 
-  /**
-   * @param {{src: string, dst: string, x: number, y: number, z: number,
-   *          strict?: boolean, signal?: AbortSignal}} request
+  /*
+   * Fetch whatever the operation needs, then transform. Shared by transform
+   * and transformMany so both see the same grids; the only difference is how
+   * many points come back.
    */
-  async function transform({ src, dst, x, y, z, strict = false, signal }) {
+  async function ensureGridsFor({ src, dst, x, y, allowBallpark, signal }) {
+    const strict = !allowBallpark;
     const grids = prepareGridSet(src, dst, x, y, strict);
     const missing = grids.filter(
       (grid) => grid.fullName && !gridProvider.isMounted(grid.fullName),
@@ -182,7 +187,54 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     }
 
     if (strict) verifyStrictOperation(src, dst, x, y);
-    return projModule.transform(src, dst, x, y, z);
+  }
+
+  /**
+   * @param {{src: string, dst: string, x: number, y: number, z: number,
+   *          allowBallpark?: boolean, signal?: AbortSignal}} request
+   */
+  async function transform({ src, dst, x, y, z, allowBallpark = false, signal }) {
+    await ensureGridsFor({ src, dst, x, y, allowBallpark, signal });
+    return projModule.transform(src, dst, x, y, z, allowBallpark);
+  }
+
+  /**
+   * Many points in one call. Grids are resolved from the first point, which is
+   * what makes this worth having: one enumeration and one round trip for the
+   * whole array instead of one per point. PROJ still picks the operation per
+   * point inside pw_transform_many, so a long array crossing regions is
+   * transformed correctly; only the grid pre-fetch is decided up front, and a
+   * point needing a grid the first point did not is reported rather than
+   * silently downgraded.
+   *
+   * @param {{src: string, dst: string, xyz: Float64Array,
+   *          allowBallpark?: boolean, signal?: AbortSignal}} request
+   */
+  async function transformMany({ src, dst, xyz, allowBallpark = false, signal }) {
+    if (!(xyz instanceof Float64Array)) {
+      throw new TypeError('transformMany: xyz must be a Float64Array');
+    }
+    if (xyz.length % 3 !== 0) {
+      throw new RangeError('transformMany: xyz length must be a multiple of 3');
+    }
+    if (xyz.length > 0) {
+      await ensureGridsFor({
+        src, dst, x: xyz[0], y: xyz[1], allowBallpark, signal,
+      });
+    }
+    return projModule.transformMany(src, dst, xyz, allowBallpark);
+  }
+
+  /**
+   * @param {{src: string, dst: string, x?: number, y?: number,
+   *          allowBallpark?: boolean, signal?: AbortSignal}} request
+   */
+  async function describe({ src, dst, x = NaN, y = NaN, allowBallpark = true, signal }) {
+    // Describing is a question, not a transform, so it fetches grids first:
+    // otherwise it would report the operation available before the fetch and
+    // a caller would act on a stale answer.
+    await ensureGridsFor({ src, dst, x, y, allowBallpark: true, signal });
+    return projModule.describe(src, dst, x, y, allowBallpark);
   }
 
   function resolvePreloadNames(spec) {
@@ -229,5 +281,5 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     preparedGridSets.clear();
   }
 
-  return { transform, preloadGrids, clearPrepareCache };
+  return { transform, transformMany, describe, preloadGrids, clearPrepareCache };
 }

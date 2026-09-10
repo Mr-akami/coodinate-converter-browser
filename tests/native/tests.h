@@ -19,3 +19,4 @@ void test_ballpark_only_pair();
 void test_strict_transform_across_grid_arrival();
 void test_geoid_applies_outside_declared_extent();
 void test_vertical_only_source_round_trips();
+void test_describe_reports_operation();

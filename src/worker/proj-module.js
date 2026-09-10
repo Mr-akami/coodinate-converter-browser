@@ -70,7 +70,7 @@ export async function createProjModule({ moduleUrl, wasmUrl, memfsPath, projDbBy
       );
     },
 
-    transform(src, dst, x, y, z) {
+    transform(src, dst, x, y, z, allowBallpark = true) {
       const ptr = Module._malloc(3 * 8);
       if (!ptr) throw new Error('malloc failed');
       try {
@@ -79,13 +79,11 @@ export async function createProjModule({ moduleUrl, wasmUrl, memfsPath, projDbBy
         Module.HEAPF64[base + 1] = y;
         Module.HEAPF64[base + 2] = z || 0;
 
-        // allow_ballpark is 1 for every call: strict mode decides with
-        // pw_strict_check beforehand, so this call never owns that decision.
         const status = Module.ccall(
           'pw_transform',
           'number',
           ['string', 'string', 'number', 'number', 'number', 'number'],
-          [src, dst, 1, ptr, ptr + 8, ptr + 16],
+          [src, dst, allowBallpark ? 1 : 0, ptr, ptr + 8, ptr + 16],
         );
 
         if (status === TRANSFORM_MISSING_GRID) {
@@ -105,6 +103,74 @@ export async function createProjModule({ moduleUrl, wasmUrl, memfsPath, projDbBy
         };
       } finally {
         Module._free(ptr);
+      }
+    },
+
+    /*
+     * One call for many points. The whole reason it exists is that a caller
+     * transforming a large array must not pay a worker round trip per point;
+     * PROJ still resolves the operation per point inside, so results match
+     * transform() exactly.
+     *
+     * `xyz` is interleaved x,y,z and is written in place.
+     */
+    transformMany(src, dst, xyz, allowBallpark = true) {
+      const count = Math.floor(xyz.length / 3);
+      if (count === 0) return xyz;
+
+      const bytes = count * 3 * 8;
+      const ptr = Module._malloc(bytes);
+      if (!ptr) throw new Error('malloc failed');
+      try {
+        Module.HEAPF64.set(xyz.subarray(0, count * 3), ptr >> 3);
+        const status = Module.ccall(
+          'pw_transform_many',
+          'number',
+          ['string', 'string', 'number', 'number', 'number'],
+          [src, dst, allowBallpark ? 1 : 0, ptr, count],
+        );
+
+        if (status >= 0) {
+          throw new Error(
+            `pw_transform_many failed at point ${status} (${src} to ${dst})`,
+          );
+        }
+        if (status === -TRANSFORM_MISSING_GRID) {
+          throw new MissingGridError(`missing grid for ${src} to ${dst}`, { reason: 'missing_grid' });
+        }
+        if (status === -TRANSFORM_BALLPARK_ONLY) {
+          throw new MissingGridError(`ballpark only for ${src} to ${dst}`, { reason: 'ballpark_only' });
+        }
+        if (status !== -1) {
+          throw new Error(`pw_transform_many failed: ${status} (${src} to ${dst})`);
+        }
+
+        xyz.set(Module.HEAPF64.subarray(ptr >> 3, (ptr >> 3) + count * 3));
+        return xyz;
+      } finally {
+        Module._free(ptr);
+      }
+    },
+
+    describe(src, dst, x, y, allowBallpark = true) {
+      const statusPtr = Module._malloc(4);
+      if (!statusPtr) throw new Error('malloc failed');
+      let jsonPtr = 0;
+      try {
+        jsonPtr = Module.ccall(
+          'pw_describe',
+          'number',
+          ['string', 'string', 'number', 'number', 'number', 'number'],
+          [src, dst, coordinate(x), coordinate(y), allowBallpark ? 1 : 0, statusPtr],
+        );
+        const status = Module.HEAP32[statusPtr >> 2];
+        if (status !== 0 || !jsonPtr) {
+          throw new Error(`pw_describe failed: ${status} (${src} to ${dst})`);
+        }
+        return JSON.parse(Module.UTF8ToString(jsonPtr));
+      } finally {
+        if (jsonPtr) Module._free(jsonPtr);
+        Module._free(statusPtr);
       }
     },
 

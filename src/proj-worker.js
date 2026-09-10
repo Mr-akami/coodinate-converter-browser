@@ -74,10 +74,36 @@ async function handleTransform(message, signal) {
     x: message.x,
     y: message.y,
     z: message.z,
-    strict: message.strict === true,
+    allowBallpark: message.allowBallpark === true,
     signal,
   });
   return { type: 'result', x: result.x, y: result.y, z: result.z };
+}
+
+async function handleTransformMany(message, signal) {
+  // The array arrives as a transferred buffer and goes back the same way, so
+  // a large batch is never copied between threads.
+  const xyz = new Float64Array(message.xyz);
+  await requireFlow().transformMany({
+    src: message.src,
+    dst: message.dst,
+    xyz,
+    allowBallpark: message.allowBallpark === true,
+    signal,
+  });
+  return { type: 'resultMany', xyz: xyz.buffer, transfer: [xyz.buffer] };
+}
+
+async function handleDescribe(message, signal) {
+  const info = await requireFlow().describe({
+    src: message.src,
+    dst: message.dst,
+    x: message.x,
+    y: message.y,
+    allowBallpark: message.allowBallpark !== false,
+    signal,
+  });
+  return { type: 'described', info };
 }
 
 async function handlePreloadGrids(message, signal) {
@@ -99,6 +125,10 @@ function route(message, signal) {
       return handleInit(message);
     case 'transform':
       return handleTransform(message, signal);
+    case 'transformMany':
+      return handleTransformMany(message, signal);
+    case 'describe':
+      return handleDescribe(message, signal);
     case 'preloadGrids':
       return handlePreloadGrids(message, signal);
     case 'clearPrepareCache':
@@ -124,7 +154,10 @@ function errorReply(id, err) {
 async function dispatch(message, controller) {
   try {
     const payload = await route(message, controller.signal);
-    self.postMessage({ ...payload, id: message.id });
+    // A reply may hand back an ArrayBuffer it wants transferred rather than
+    // copied; `transfer` carries that list and is not part of the reply.
+    const { transfer, ...reply } = payload;
+    self.postMessage({ ...reply, id: message.id }, transfer || []);
   } catch (err) {
     self.postMessage(errorReply(message.id, err));
   } finally {

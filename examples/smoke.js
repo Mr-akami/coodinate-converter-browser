@@ -1,4 +1,4 @@
-import { initProjRuntime } from '../src/proj-runtime.js';
+import { createProj } from '../src/proj-runtime.js';
 
 const logEl = document.querySelector('#log');
 
@@ -12,8 +12,8 @@ function log(msg) {
 async function main() {
   log('Starting PROJ runtime...');
 
-  const { api } = await initProjRuntime({
-    apiBaseUrl: '/api/proj-data',
+  const api = await createProj({
+    dataBaseUrl: '/api/proj-data',
     dataDirName: 'proj-data',
     wasmUrl: '/dist/proj_wasm.wasm',
     moduleUrl: `/dist/proj_wasm.js?v=${Date.now()}`,

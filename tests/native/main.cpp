@@ -65,6 +65,7 @@ int main() {
        test_geoid_applies_outside_declared_extent},
       {"vertical_only_source_round_trips",
        test_vertical_only_source_round_trips},
+      {"describe_reports_operation", test_describe_reports_operation},
   };
 
   return pwtest::run(cases, sizeof(cases) / sizeof(cases[0]));
