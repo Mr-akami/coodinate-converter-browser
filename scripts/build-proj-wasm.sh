@@ -14,6 +14,12 @@ WITH_TIFF="${WITH_TIFF:-1}"
 WITH_ZLIB="${WITH_ZLIB:-1}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 
+# Every object that ends up in the link must be built with the same exception
+# model and the same LTO setting; mixing them breaks unwinding at runtime
+# without any build-time error. Defined once and passed to SQLite, zlib,
+# libtiff, PROJ and the wrapper.
+WASM_CODEGEN_FLAGS="-fwasm-exceptions -flto"
+
 if [[ ! -d "${PROJ_DIR}" ]]; then
   echo "PROJ submodule not found at ${PROJ_DIR}."
   echo "Run:"
@@ -35,6 +41,13 @@ EXE_SQLITE3="$(command -v sqlite3 || true)"
 if [[ -z "${EXE_SQLITE3}" ]]; then
   echo "sqlite3 binary not found. Install sqlite3 and retry."
   exit 1
+fi
+
+# The PROJ build directory holds a CMake cache with the previous compile flags
+# and the objects built from them, so a flag change only takes effect if it is
+# discarded together with the dependency archives.
+if [[ "${FORCE_REBUILD}" == "1" ]]; then
+  rm -rf "${BUILD_DIR}"
 fi
 
 mkdir -p "${BUILD_DIR}"
@@ -67,6 +80,7 @@ if [[ ! -f "${SQLITE_LIB}" || ! -f "${SQLITE_INC}" ]]; then
   emcc sqlite3.c \
     -c \
     -O3 \
+    ${WASM_CODEGEN_FLAGS} \
     -DSQLITE_THREADSAFE=1 \
     -o sqlite3.o
   emar rcs "${SQLITE_LIB}" sqlite3.o
@@ -101,9 +115,11 @@ if [[ "${WITH_ZLIB}" == "1" ]]; then
     sed -i '/set_target_properties(zlib /d' CMakeLists.txt
     sed -i 's/install(TARGETS zlib zlibstatic/install(TARGETS zlibstatic/g' CMakeLists.txt
 
+    # zlib declares `project(zlib C)`, so only the C flags are consumed.
     emcmake cmake -S . -B build_wasm \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_FLAGS="${WASM_CODEGEN_FLAGS}" \
       -DCMAKE_INSTALL_PREFIX="${DEPS_INSTALL_DIR}" \
       -DBUILD_SHARED_LIBS=OFF \
       -DZLIB_BUILD_EXAMPLES=OFF
@@ -144,6 +160,8 @@ if [[ "${WITH_TIFF}" == "1" ]]; then
     emcmake cmake -S . -B build_wasm \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_FLAGS="${WASM_CODEGEN_FLAGS}" \
+      -DCMAKE_CXX_FLAGS="${WASM_CODEGEN_FLAGS}" \
       -DCMAKE_INSTALL_PREFIX="${DEPS_INSTALL_DIR}" \
       -DBUILD_SHARED_LIBS=OFF \
       -Dtiff-tools=OFF \
@@ -168,8 +186,8 @@ fi
 
 PROJ_CMAKE_ARGS=(
   -DCMAKE_BUILD_TYPE=Release
-  -DCMAKE_CXX_FLAGS="-fexceptions"
-  -DCMAKE_C_FLAGS="-fexceptions"
+  -DCMAKE_CXX_FLAGS="${WASM_CODEGEN_FLAGS}"
+  -DCMAKE_C_FLAGS="${WASM_CODEGEN_FLAGS}"
   -DBUILD_SHARED_LIBS=OFF
   -DBUILD_TESTING=OFF
   -DBUILD_APPS=OFF
@@ -207,21 +225,20 @@ fi
 
 emcc "${WRAPPER_SRC}" "${FINAL_LIBS[@]}" \
   -O3 \
-  -fexceptions \
+  ${WASM_CODEGEN_FLAGS} \
   -I "${BUILD_DIR}/src" \
   -I "${PROJ_DIR}/src" \
   -I "${DEPS_INSTALL_DIR}/include" \
   -sMODULARIZE=1 \
   -sEXPORT_ES6=1 \
-  -sENVIRONMENT=web,worker \
-  -sASYNCIFY=1 \
-  -sDISABLE_EXCEPTION_CATCHING=0 \
+  -sENVIRONMENT=web,worker,node \
   -sFILESYSTEM=1 \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
   -sEXPORTED_FUNCTIONS='["_pw_init","_pw_transform","_pw_grids_needed","_pw_strict_check","_pw_refresh_after_grid_write","_pw_clear_cache","_pw_cleanup","_malloc","_free"]' \
-  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","FS","HEAPF64","HEAPU8","UTF8ToString"]' \
+  -sEXPORTED_RUNTIME_METHODS='["ccall","FS","HEAPF64","UTF8ToString"]' \
   -lworkerfs.js \
+  -lnodefs.js \
   -o "${DIST_DIR}/proj_wasm.js"
 
 echo "Wasm bundle created at ${DIST_DIR}/proj_wasm.js"

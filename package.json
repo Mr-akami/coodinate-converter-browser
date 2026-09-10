@@ -6,6 +6,9 @@
     "build:manifest": "node scripts/build-manifest.mjs",
     "dev": "tsx watch server/index.ts",
     "start": "tsx server/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:lib": "tsc -p tsconfig.json",
+    "test:unit": "vitest run",
     "test:browser": "node tests/run-browser-check.mjs"
   },
   "packageManager": "pnpm@9.15.0",
@@ -14,7 +17,10 @@
     "hono": "^4.6.14"
   },
   "devDependencies": {
+    "@types/node": "^26.5.0",
     "playwright": "^1.41.2",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
   }
 }
