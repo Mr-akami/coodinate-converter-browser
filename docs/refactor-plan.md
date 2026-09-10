@@ -5,10 +5,12 @@ task refers to this document. Terms in **bold** are defined in `/CONTEXT.md`.
 
 ## Target shape
 
-An npm package `@mr-akami/proj-wasm-proj-data` that a host application embeds.
-The host serves **proj.db** and **grids** as plain static files (S3 or similar);
-the library is told only a base URL. There is no application server in
-production.
+An npm package `@mr-akami/proj-wasm-proj-data` that a host application embeds,
+in a browser or on Node. In the browser the host serves **proj.db** and
+**grids** as plain static files (S3 or similar) and the library is told only a
+base URL; there is no application server in production. On Node the data is
+usually already on the machine, so the library reads it straight from the
+filesystem.
 
 ```ts
 const proj = await createProj({ dataBaseUrl, workerUrl?, wasmUrl?, storage? });
@@ -31,7 +33,23 @@ proj.dataVersion                                       // string
   public. `preloadGrids('all')` moves to an internal testing entry point; it is
   used only by tests and the demo page.
 
+On Node the same surface is reached through a separate entry point:
+
+```ts
+const proj = await createProjNode({ dataDir?, inProcess? });
+```
+
 ## Key decisions
+
+**Node runs the same wasm.** Not for speed — a native binding would win — but
+so that a server and a browser agree. Both execute the same module built from
+the same PROJ commit against the same **proj.db** and **grids**, so they select
+the same operation and return the same numbers. `gdal-async` bundles its own
+PROJ and can disagree silently; `proj4js` has no proj.db, no GeoTIFF grids and
+no geoid support, so it cannot do the JGD2024, GSIGEO2011 or NTv2 cases at all.
+On Node there is no manifest, no download and no OPFS: the data directory comes
+from an explicit option, else `PROJ_DATA`, else `PROJ_LIB`, and is mounted with
+NODEFS.
 
 **Static Data Origin.** `scripts/build-data-dist.mjs` produces
 `data-dist/v/<dataVersion>/{manifest.json,proj.db,grids/*}` plus a top-level
@@ -108,13 +126,31 @@ Three layers.
    wasm build, and record that commit in the file header. The current CSV came
    from PROJ 9.7.0 while the wasm is 9.5.0-568.
 
+## PROJ version is pinned by the data, not by preference
+
+The submodule is pinned to the **9.8.1** tag. It cannot simply track upstream
+master: PROJ raised its database layout from 6 to 7 on 2026-04-04 in commit
+`36631398`, and every build after that refuses a layout-6 **proj.db** with
+
+```
+proj.db contains DATABASE.LAYOUT.VERSION.MINOR = 6 whereas a number >= 7 is expected
+```
+
+Our `third_party/sc-proj-data` database is layout 6, built by PROJ 9.7.1, and
+is customised downstream by that repository's Python scripts. Moving to a
+9.9-era PROJ therefore requires sc-proj-data to regenerate its database against
+the newer schema first — it is not a change this repository can make. 9.8.1 is
+the newest release that accepts layout 6.
+
 ## Build
 
 Drop `-sASYNCIFY` — nothing calls back into JS asynchronously once
 `ENABLE_CURL=OFF`, and it costs both speed and size. Use `-fwasm-exceptions`
 consistently across PROJ, SQLite, libtiff, zlib and the wrapper. Add `-flto` if
 it links cleanly. Trim `EXPORTED_FUNCTIONS` and `EXPORTED_RUNTIME_METHODS` to
-what remains in use. Measure before and after with `tests/bench.html`.
+what remains in use. Measure before and after with `tests/bench.html`. One
+module serves both environments, so `-sENVIRONMENT` must include `node` and
+`-lnodefs.js` must be linked alongside `-lworkerfs.js`.
 
 ## Cleanup
 
