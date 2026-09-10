@@ -147,9 +147,10 @@ sc-proj-data to regenerate its database against the newer schema, which is a
 change in that repository, not this one. 9.8.1 would also work — it is the last
 release accepting layout 6 — but it is not what built the data.
 
-Because the versions now match, `cs2cs` built from this submodule is also the
-right tool for regenerating `tests/reference.csv`. Do not use the `proj`
-package from the Nix shell or whatever is on `PATH`; both are 9.7.0.
+Because the versions now match, `cs2cs` built from this submodule is the right
+tool for regenerating `tests/reference.csv`. The `cs2cs` on the bare `PATH` is
+9.7.0 and must not be used. The Nix shell's `proj` is 9.7.1 and would do, but
+a build from the submodule matches the commit and the build flags as well.
 
 ## Build
 
