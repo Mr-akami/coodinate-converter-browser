@@ -122,25 +122,34 @@ Three layers.
 2. **TypeScript unit tests** with vitest: manifest parsing, version generations,
    the RPC layer and error mapping, against an in-memory storage backend.
 3. **End-to-end** with Playwright on Chromium, Firefox and WebKit. Regenerate
-   `tests/reference.csv` from a `cs2cs` built from the same PROJ commit as the
-   wasm build, and record that commit in the file header. The current CSV came
-   from PROJ 9.7.0 while the wasm is 9.5.0-568.
+   `tests/reference.csv` from a `cs2cs` built from the same PROJ tag as the
+   wasm build, and record that tag in the file header. The current CSV came
+   from a host `cs2cs` at 9.7.0, one patch release below the pinned 9.7.1.
 
 ## PROJ version is pinned by the data, not by preference
 
-The submodule is pinned to the **9.8.1** tag. It cannot simply track upstream
-master: PROJ raised its database layout from 6 to 7 on 2026-04-04 in commit
-`36631398`, and every build after that refuses a layout-6 **proj.db** with
+The submodule is pinned to the **9.7.1** tag, which is exactly the version that
+generated our database: `third_party/sc-proj-data/proj/proj.db` records
+`PROJ.VERSION = 9.7.1` and `DATABASE.LAYOUT.VERSION.MINOR = 6`. Matching them
+removes any schema drift between the code and the data it reads.
+
+Tracking upstream master is not an option regardless. PROJ raised the database
+layout from 6 to 7 on 2026-04-04 in commit `36631398`, and every build after
+that refuses a layout-6 database with
 
 ```
 proj.db contains DATABASE.LAYOUT.VERSION.MINOR = 6 whereas a number >= 7 is expected
 ```
 
-Our `third_party/sc-proj-data` database is layout 6, built by PROJ 9.7.1, and
-is customised downstream by that repository's Python scripts. Moving to a
-9.9-era PROJ therefore requires sc-proj-data to regenerate its database against
-the newer schema first — it is not a change this repository can make. 9.8.1 is
-the newest release that accepts layout 6.
+Measured, not assumed: building against master (9.9.0-dev) took the end-to-end
+suite from 335 passes to 5. Moving to a 9.9-era PROJ first requires
+sc-proj-data to regenerate its database against the newer schema, which is a
+change in that repository, not this one. 9.8.1 would also work — it is the last
+release accepting layout 6 — but it is not what built the data.
+
+Because the versions now match, `cs2cs` built from this submodule is also the
+right tool for regenerating `tests/reference.csv`. Do not use the `proj`
+package from the Nix shell or whatever is on `PATH`; both are 9.7.0.
 
 ## Build
 
