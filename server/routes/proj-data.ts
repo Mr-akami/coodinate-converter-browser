@@ -1,24 +1,20 @@
 import type { Hono } from 'hono';
-import { createReadStream, statSync } from 'node:fs';
-import { resolve, join, relative, isAbsolute } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 
-export interface ManifestGridEntry {
-  size: number;
-  sha256: string;
-}
-
-export interface Manifest {
-  version: string;
-  generatedAt: string;
-  projDb: { size: number; sha256: string };
-  grids: Record<string, ManifestGridEntry>;
-}
+/*
+ * Serve a generated Data Origin from disk, for development and for the test
+ * suite. In production this directory is uploaded to static storage and no
+ * server is involved, so this file exists to imitate one — including the cache
+ * headers a host is told to set, because getting those wrong is a class of bug
+ * the suite should be able to reproduce.
+ */
 
 export interface ProjDataConfig {
-  manifest: Manifest;
-  manifestText: string;
-  projDataDir: string; // absolute path
+  /** Absolute path to a directory produced by scripts/build-data-dist.mjs. */
+  dataDistDir: string;
 }
 
 export interface DevFaultRef {
@@ -26,11 +22,47 @@ export interface DevFaultRef {
   forced404: Set<string>;
 }
 
-const SAFE_NAME = /^[A-Za-z0-9._+\-]+$/;
-
 function streamFile(path: string): ReadableStream<Uint8Array> {
-  const node = createReadStream(path);
-  return Readable.toWeb(node) as unknown as ReadableStream<Uint8Array>;
+  return Readable.toWeb(createReadStream(path)) as unknown as ReadableStream<Uint8Array>;
+}
+
+/* Version and grid names come from the URL, so they are checked before they
+   reach the filesystem rather than after. */
+const SAFE_SEGMENT = /^[A-Za-z0-9._+-]+$/;
+
+function safeJoin(root: string, ...segments: string[]): string | null {
+  for (const segment of segments) {
+    if (!segment || !SAFE_SEGMENT.test(segment) || segment === '.' || segment === '..') {
+      return null;
+    }
+  }
+  const full = resolve(root, join(...segments));
+  const rel = relative(root, full);
+  return rel.startsWith('..') || isAbsolute(rel) ? null : full;
+}
+
+async function sendFile(
+  path: string,
+  contentType: string,
+  cacheControl: string,
+): Promise<Response | null> {
+  let info;
+  try {
+    info = await stat(path);
+  } catch {
+    return null;
+  }
+  if (!info.isFile()) return null;
+
+  // Node's Response accepts a web ReadableStream; the DOM lib is not loaded
+  // here, so the body type has to be widened explicitly.
+  return new Response(streamFile(path) as unknown as ConstructorParameters<typeof Response>[0], {
+    headers: {
+      'Content-Type': contentType,
+      'Content-Length': String(info.size),
+      'Cache-Control': cacheControl,
+    },
+  });
 }
 
 export function registerProjDataRoutes(
@@ -38,51 +70,38 @@ export function registerProjDataRoutes(
   cfg: ProjDataConfig,
   fault: DevFaultRef,
 ): void {
-  const { manifest, manifestText, projDataDir } = cfg;
-  const version = manifest.version;
-  const projDbPath = resolve(projDataDir, 'proj.db');
-  const projDbSize = manifest.projDb.size;
-  const projDbEtag = `"${manifest.projDb.sha256}"`;
+  const root = cfg.dataDistDir;
 
-  // Convenience redirect: /api/proj-data/manifest -> /v/<current>/manifest
-  app.get('/api/proj-data/manifest', (c) => {
-    return c.redirect(`/api/proj-data/v/${version}/manifest`, 302);
+  /* The pointer to the current Data Version must never be cached, or a client
+     keeps asking for a version that has been retired. */
+  app.get('/api/proj-data/manifest', async (c) => {
+    const body = await sendFile(
+      join(root, 'manifest.json'),
+      'application/json; charset=utf-8',
+      'no-cache',
+    );
+    return body ?? c.text('manifest not built', 404);
   });
 
-  // /v/:version/manifest — current version returns body, others 410.
-  app.get('/api/proj-data/v/:version/manifest', (c) => {
-    const v = c.req.param('version');
-    if (v !== version) {
-      return c.text('manifest version retired', 410);
-    }
-    c.header('Content-Type', 'application/json; charset=utf-8');
-    c.header('Cache-Control', 'public, max-age=3600');
-    c.header('ETag', `"manifest-${version}"`);
-    return c.body(manifestText);
+  app.get('/api/proj-data/v/:version/manifest', async (c) => {
+    const path = safeJoin(root, 'v', c.req.param('version'), 'manifest.json');
+    if (!path) return c.text('bad version', 400);
+    const body = await sendFile(path, 'application/json; charset=utf-8', 'no-cache');
+    return body ?? c.text('unknown version', 404);
   });
 
+  /* Everything addressed by version is immutable: the version is derived from
+     the hash of proj.db, so these bytes can never change under this path. */
   app.get('/api/proj-data/v/:version/proj.db', async (c) => {
-    const v = c.req.param('version');
-    if (v !== version) return c.text('version retired', 410);
-
-    const ifNoneMatch = c.req.header('if-none-match');
-    if (ifNoneMatch === projDbEtag) {
-      c.header('ETag', projDbEtag);
-      c.header('Cache-Control', 'public, max-age=31536000, immutable');
-      return c.body(null, 304);
-    }
-
-    c.header('Content-Type', 'application/octet-stream');
-    c.header('Content-Length', String(projDbSize));
-    c.header('ETag', projDbEtag);
-    c.header('Cache-Control', 'public, max-age=31536000, immutable');
-    return c.body(streamFile(projDbPath));
+    const path = safeJoin(root, 'v', c.req.param('version'), 'proj.db');
+    if (!path) return c.text('bad version', 400);
+    const body = await sendFile(
+      path, 'application/octet-stream', 'public, max-age=31536000, immutable',
+    );
+    return body ?? c.text('unknown version', 404);
   });
 
   app.get('/api/proj-data/v/:version/grids/:name', async (c) => {
-    const v = c.req.param('version');
-    if (v !== version) return c.text('version retired', 410);
-
     let name: string;
     try {
       name = decodeURIComponent(c.req.param('name'));
@@ -90,51 +109,15 @@ export function registerProjDataRoutes(
       return c.text('bad name encoding', 400);
     }
 
-    // Defense layer 1: reject control chars and structural separators.
-    if (!name || name.includes('/') || name.includes('\\') || name.includes('\0') ||
-        name === '.' || name === '..') {
-      return c.text('bad name', 400);
-    }
-
-    // Defense layer 2: manifest allow-list match.
-    const entry = manifest.grids[name];
-    if (!entry) return c.text('not in manifest', 404);
-
-    // Defense layer 3: dev-mode forced 404.
     if (fault.enabled && fault.forced404.has(name)) {
       return c.text('forced 404 (dev)', 404);
     }
 
-    // Defense layer 4: filesystem path containment check.
-    const full = resolve(projDataDir, name);
-    const rel = relative(projDataDir, full);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
-      return c.text('path escape rejected', 400);
-    }
-
-    let stat;
-    try {
-      stat = statSync(full);
-    } catch {
-      return c.text('grid file missing on disk', 404);
-    }
-    if (!stat.isFile()) return c.text('not a file', 404);
-    if (stat.size !== entry.size) {
-      return c.text('manifest size mismatch (rebuild manifest)', 500);
-    }
-
-    const etag = `"${entry.sha256}"`;
-    if (c.req.header('if-none-match') === etag) {
-      c.header('ETag', etag);
-      c.header('Cache-Control', 'public, max-age=31536000, immutable');
-      return c.body(null, 304);
-    }
-
-    c.header('Content-Type', 'application/octet-stream');
-    c.header('Content-Length', String(entry.size));
-    c.header('ETag', etag);
-    c.header('Cache-Control', 'public, max-age=31536000, immutable');
-    c.header('X-Grid-SHA256', entry.sha256);
-    return c.body(streamFile(full));
+    const path = safeJoin(root, 'v', c.req.param('version'), 'grids', name);
+    if (!path) return c.text('bad name', 400);
+    const body = await sendFile(
+      path, 'application/octet-stream', 'public, max-age=31536000, immutable',
+    );
+    return body ?? c.text('no such grid', 404);
   });
 }

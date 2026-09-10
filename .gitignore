@@ -27,8 +27,6 @@ pnpm-debug.log*
 .idea/
 .vscode/
 
-# Hono server build artifact (regenerate via `npm run build:manifest`)
-server/manifest.json
 
 # pnpm local store
 .pnpm-store/
@@ -36,3 +34,6 @@ server/manifest.json
 # Large external proj-data checkout (see README for how to obtain)
 third_party/sc-proj-data/
 .takt/
+
+# Generated Data Origin (regenerate with npm run build:data)
+data-dist/
