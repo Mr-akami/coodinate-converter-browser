@@ -1,204 +1,147 @@
-// PROJ wasm worker.
-// Lifecycle:
-//   1. Main thread sends 'init' with proj.db bytes; we mount under MEMFS and call pw_init.
-//   2. For each transform, main thread sends 'prepare' (we enumerate grids), then
-//      'addGrids' (we mount + invalidate caches), then 'transform' (strict).
+/*
+ * PROJ worker: the only owner of OPFS, MEMFS and the PROJ context.
+ *
+ * It installs the Data Version, loads the wasm module, mounts grids and runs
+ * transforms. The main thread never holds grid bytes. Requests run one at a
+ * time because they share the PROJ context and the mount table; an abort
+ * message jumps that queue so it can reach work already in flight.
+ */
 
-let Module = null;
-let memfsPath = '/proj-data';
-const mountedGrids = new Set();
-// Pair-level strict-check memo. PROJ enumeration is expensive; once we know
-// (src, dst) is instantiable with the currently-mounted grids, repeat calls
-// can skip the check until something changes (addGrids / refresh).
-const strictCheckedOk = new Set();
+import { MissingGridError } from './errors.js';
+import { installProjData } from './worker/data-install.js';
+import { createGridProvider } from './worker/grid-provider.js';
+import { createOpfsStore, createWebLock } from './worker/opfs-store.js';
+import { createProjModule } from './worker/proj-module.js';
+import { createTransformFlow } from './worker/transform-flow.js';
 
-function ensureMemfsDir(FS, path) {
-  try {
-    FS.mkdir(path);
-  } catch (err) {
-    if (!err || err.code !== 'EEXIST') throw err;
-  }
+let flow = null;
+let queue = Promise.resolve();
+/** @type {Map<unknown, AbortController>} */
+const running = new Map();
+
+const fetchImpl = (url, init) => fetch(url, init);
+
+function postProgress(id, event) {
+  self.postMessage({ type: 'progress', id, ...event });
 }
 
-async function handleInit(msg) {
-  const { wasmUrl, moduleUrl, projDbBytes, mountPath } = msg;
-  if (!projDbBytes) throw new Error('projDbBytes is required');
+function requireFlow() {
+  if (!flow) throw new Error('proj runtime is not initialised');
+  return flow;
+}
 
-  memfsPath = mountPath || '/proj-data';
+async function handleInit(message) {
+  const { apiBaseUrl, dataDirName, memfsPath, wasmUrl, moduleUrl } = message;
 
-  const url = moduleUrl || '../dist/proj_wasm.js';
-  const mod = await import(url);
-  const createModule = mod.default || mod;
-
-  Module = await createModule({
-    locateFile: (path) => {
-      if (wasmUrl && path.endsWith('.wasm')) return wasmUrl;
-      return path;
-    },
+  const store = await createOpfsStore(dataDirName);
+  const { dataVersion, manifest } = await installProjData({
+    store,
+    lock: createWebLock(),
+    fetchImpl,
+    manifestUrl: `${apiBaseUrl}/manifest`,
+    projDbUrlPattern: `${apiBaseUrl}/v/{version}/proj.db`,
+    onProgress: (event) => postProgress(message.id, event),
   });
 
-  ensureMemfsDir(Module.FS, memfsPath);
-  Module.FS.writeFile(`${memfsPath}/proj.db`, new Uint8Array(projDbBytes));
+  const projDbFile = await store.getFile(`${dataVersion}/proj.db`);
+  const projModule = await createProjModule({
+    moduleUrl,
+    wasmUrl,
+    memfsPath,
+    projDbBytes: new Uint8Array(await projDbFile.arrayBuffer()),
+  });
 
-  const rc = Module.ccall('pw_init', 'number', ['string'], [memfsPath]);
-  if (rc !== 0) throw new Error(`pw_init failed: ${rc}`);
+  const gridProvider = createGridProvider({
+    store,
+    fs: projModule.fs,
+    memfsPath,
+    dataVersion,
+    gridsBaseUrl: `${apiBaseUrl}/v/${encodeURIComponent(dataVersion)}/grids/`,
+    manifest,
+    fetchImpl,
+  });
+  const alreadyStored = await gridProvider.mountPublishedGrids();
+  if (alreadyStored > 0) projModule.refreshAfterGridWrite();
+
+  flow = createTransformFlow({ projModule, gridProvider, manifest });
+  return { type: 'ready', manifest, dataVersion };
 }
 
-function handlePrepare(msg) {
-  const { src, dst, x, y, discardMissing = 0 } = msg;
-  const statusPtr = Module._malloc(4);
-  if (!statusPtr) throw new Error('malloc failed');
-  let jsonPtr = 0;
+async function handleTransform(message, signal) {
+  const result = await requireFlow().transform({
+    src: message.src,
+    dst: message.dst,
+    x: message.x,
+    y: message.y,
+    z: message.z,
+    strict: message.strict === true,
+    signal,
+  });
+  return { type: 'result', x: result.x, y: result.y, z: result.z };
+}
+
+async function handlePreloadGrids(message, signal) {
+  const result = await requireFlow().preloadGrids(message.spec, {
+    signal,
+    onProgress: (event) => postProgress(message.id, event),
+  });
+  return { type: 'preloaded', fetched: result.fetched };
+}
+
+function handleClearPrepareCache() {
+  requireFlow().clearPrepareCache();
+  return { type: 'prepareCacheCleared' };
+}
+
+function route(message, signal) {
+  switch (message.type) {
+    case 'init':
+      return handleInit(message);
+    case 'transform':
+      return handleTransform(message, signal);
+    case 'preloadGrids':
+      return handlePreloadGrids(message, signal);
+    case 'clearPrepareCache':
+      return handleClearPrepareCache();
+    default:
+      throw new Error(`unknown message type: ${message.type}`);
+  }
+}
+
+function errorReply(id, err) {
+  const reply = {
+    type: 'error',
+    id,
+    error: err instanceof Error ? err.message : String(err),
+  };
+  if (err instanceof MissingGridError) {
+    reply.errorKind = err.reason;
+    reply.missingGrids = err.missingGrids;
+  }
+  return reply;
+}
+
+async function dispatch(message, controller) {
   try {
-    const xv = Number.isFinite(x) ? x : NaN;
-    const yv = Number.isFinite(y) ? y : NaN;
-    jsonPtr = Module.ccall(
-      'pw_grids_needed',
-      'number',
-      ['string', 'string', 'number', 'number', 'number', 'number'],
-      [src, dst, xv, yv, discardMissing ? 1 : 0, statusPtr],
-    );
-    const status = Module.HEAP32[statusPtr >> 2];
-    if (status < 0) {
-      // -1 arg, -2 crs, -3 ballpark_only
-      if (status === -3) {
-        const err = new Error('no non-ballpark op available');
-        err.errorKind = 'ballpark_only';
-        throw err;
-      }
-      throw new Error(`pw_grids_needed failed: ${status}`);
-    }
-    const grids = JSON.parse(Module.UTF8ToString(jsonPtr));
-    return { grids };
-  } finally {
-    if (jsonPtr) Module._free(jsonPtr);
-    Module._free(statusPtr);
-  }
-}
-
-function handleAddGrids(msg) {
-  const { grids } = msg;
-  if (!Array.isArray(grids) || grids.length === 0) return { added: 0 };
-
-  for (const g of grids) {
-    if (!g || !g.name || !g.bytes) continue;
-    const path = `${memfsPath}/${g.name}`;
-    Module.FS.writeFile(path, g.bytes instanceof Uint8Array ? g.bytes : new Uint8Array(g.bytes));
-    mountedGrids.add(g.name);
-  }
-
-  // Invalidate all PROJ caches so the new files are picked up; this also
-  // recreates the context (covers DatabaseContext::cacheGridInfo_).
-  const rc = Module.ccall('pw_refresh_after_grid_write', 'number', [], []);
-  if (rc !== 0) throw new Error(`pw_refresh_after_grid_write failed: ${rc}`);
-  strictCheckedOk.clear();
-  return { added: grids.length };
-}
-
-function handleTransform(msg) {
-  const { src, dst, x, y, z, _strict } = msg;
-
-  // Optional strict pre-check (memoized per pair). When _strict is true,
-  // verify the best non-ballpark op is instantiable; otherwise let
-  // pw_transform pick the best available op including ballpark fallback
-  // (matching cs2cs default).
-  if (_strict) {
-    const pairKey = `${src}|${dst}`;
-    if (!strictCheckedOk.has(pairKey)) {
-      const xv = Number.isFinite(x) ? x : NaN;
-      const yv = Number.isFinite(y) ? y : NaN;
-      const ok = Module.ccall(
-        'pw_strict_check',
-        'number',
-        ['string', 'string', 'number', 'number'],
-        [src, dst, xv, yv],
-      );
-      if (ok !== 1) {
-        const prep = handlePrepare({ src, dst, x: xv, y: yv });
-        const missing = prep.grids.filter((g) => !g.available && g.fullName);
-        const err = new Error(missing.length
-          ? `missing grid(s): ${missing.map((g) => g.fullName).join(', ')}`
-          : 'no non-ballpark operation available (ballpark only)');
-        err.errorKind = missing.length ? 'missing_grid' : 'ballpark_only';
-        err.missingGrids = missing.map((g) => ({
-          shortName: g.shortName,
-          fullName: g.fullName,
-          url: g.url,
-        }));
-        throw err;
-      }
-      strictCheckedOk.add(pairKey);
-    }
-  }
-
-  const ptr = Module._malloc(3 * 8);
-  if (!ptr) throw new Error('malloc failed');
-  try {
-    const base = ptr >> 3;
-    Module.HEAPF64[base] = x;
-    Module.HEAPF64[base + 1] = y;
-    Module.HEAPF64[base + 2] = z || 0;
-
-    // allow_ballpark=1 keeps this phase's browser behaviour: the strict
-    // pre-check above owns the missing-grid decision.
-    const rc = Module.ccall(
-      'pw_transform', 'number',
-      ['string', 'string', 'number', 'number', 'number', 'number'],
-      [src, dst, 1, ptr, ptr + 8, ptr + 16],
-    );
-
-    if (rc === 5) {
-      const err = new Error('missing grid (race)');
-      err.errorKind = 'missing_grid';
-      throw err;
-    }
-    if (rc === 6) {
-      const err = new Error('ballpark only');
-      err.errorKind = 'ballpark_only';
-      throw err;
-    }
-    if (rc !== 0) {
-      console.warn(`[proj-worker] pw_transform failed rc=${rc} src=${src} dst=${dst} x=${x} y=${y}`);
-      throw new Error(`pw_transform failed: ${rc}`);
-    }
-
-    return {
-      x: Module.HEAPF64[base],
-      y: Module.HEAPF64[base + 1],
-      z: Module.HEAPF64[base + 2],
-    };
-  } finally {
-    Module._free(ptr);
-  }
-}
-
-self.addEventListener('message', async (e) => {
-  const { type, id } = e.data;
-  try {
-    let payload;
-    if (type === 'init') {
-      await handleInit(e.data);
-      payload = { type: 'ready' };
-    } else if (type === 'prepare') {
-      payload = { type: 'prepared', ...handlePrepare(e.data) };
-    } else if (type === 'addGrids') {
-      payload = { type: 'added', ...handleAddGrids(e.data) };
-    } else if (type === 'transform') {
-      payload = { type: 'result', ...handleTransform(e.data) };
-    } else {
-      throw new Error(`unknown message type: ${type}`);
-    }
-    self.postMessage({ ...payload, id });
+    const payload = await route(message, controller.signal);
+    self.postMessage({ ...payload, id: message.id });
   } catch (err) {
-    const message = (typeof err === 'object' && err !== null)
-      ? (err.message || err.stack || String(err))
-      : String(err);
-    self.postMessage({
-      type: 'error',
-      id,
-      error: message,
-      errorKind: err && err.errorKind,
-      missingGrids: err && err.missingGrids,
-    });
+    self.postMessage(errorReply(message.id, err));
+  } finally {
+    running.delete(message.id);
   }
+}
+
+self.addEventListener('message', (event) => {
+  const message = event.data;
+
+  if (message.type === 'abort') {
+    running.get(message.id)?.abort();
+    return;
+  }
+
+  const controller = new AbortController();
+  running.set(message.id, controller);
+  const ticket = queue.then(() => dispatch(message, controller));
+  queue = ticket.catch(() => undefined);
 });
