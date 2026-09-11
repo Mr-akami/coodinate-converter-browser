@@ -66,6 +66,16 @@ int main() {
       {"vertical_only_source_round_trips",
        test_vertical_only_source_round_trips},
       {"describe_reports_operation", test_describe_reports_operation},
+      {"list_crs_is_local_to_the_point", test_list_crs_is_local_to_the_point},
+      {"list_crs_separates_vertical_from_horizontal",
+       test_list_crs_separates_vertical_from_horizontal},
+      {"list_crs_filters_by_authority", test_list_crs_filters_by_authority},
+      {"list_crs_carries_what_a_chooser_needs",
+       test_list_crs_carries_what_a_chooser_needs},
+      {"list_crs_rejects_a_point_it_cannot_use",
+       test_list_crs_rejects_a_point_it_cannot_use},
+      {"list_crs_measures_areas_that_cross_the_antimeridian",
+       test_list_crs_measures_areas_that_cross_the_antimeridian},
   };
 
   return pwtest::run(cases, sizeof(cases) / sizeof(cases[0]));

@@ -11,12 +11,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { createProjNode, resolveDataDir } from '../../src/node.js';
+/*
+ * Imported from the built library rather than from source: the Node entry
+ * resolves its worker and its wasm module relative to its own location, so
+ * only the built layout exercises those paths.
+ */
+import { createProjNode, resolveDataDir } from '../../dist/lib/node.js';
 
 const DATA_DIR = resolve(import.meta.dirname, '../../third_party/sc-proj-data/proj');
+const BUILT = resolve(import.meta.dirname, '../../dist/lib/node.js');
 const WASM = resolve(import.meta.dirname, '../../dist/proj_wasm.js');
 
-const ready = existsSync(resolve(DATA_DIR, 'proj.db')) && existsSync(WASM);
+const ready = existsSync(resolve(DATA_DIR, 'proj.db')) && existsSync(WASM) && existsSync(BUILT);
 const withData = ready ? describe : describe.skip;
 
 describe('resolveDataDir', () => {
@@ -57,7 +63,7 @@ withData('createProjNode', () => {
   }
 
   it('transforms in a worker thread and matches the browser reference', async () => {
-    const proj = await createProjNode({ dataDir: DATA_DIR, moduleUrl: WASM });
+    const proj = await createProjNode({ dataDir: DATA_DIR });
     try {
       for (const row of referenceRows(12)) {
         const result = await proj.transform(
@@ -78,8 +84,8 @@ withData('createProjNode', () => {
   }, 120_000);
 
   it('gives the same answers in process as in a worker thread', async () => {
-    const inThread = await createProjNode({ dataDir: DATA_DIR, moduleUrl: WASM });
-    const inProcess = await createProjNode({ dataDir: DATA_DIR, moduleUrl: WASM, inProcess: true });
+    const inThread = await createProjNode({ dataDir: DATA_DIR });
+    const inProcess = await createProjNode({ dataDir: DATA_DIR, inProcess: true });
     try {
       const a = await inThread.transform('EPSG:4326', 'EPSG:6677', 139.7671, 35.6812);
       const b = await inProcess.transform('EPSG:4326', 'EPSG:6677', 139.7671, 35.6812);
@@ -91,7 +97,7 @@ withData('createProjNode', () => {
   }, 120_000);
 
   it('transforms a batch identically to one call per point', async () => {
-    const proj = await createProjNode({ dataDir: DATA_DIR, moduleUrl: WASM });
+    const proj = await createProjNode({ dataDir: DATA_DIR });
     try {
       const points = [
         [139.7671, 35.6812, 0],
@@ -114,6 +120,51 @@ withData('createProjNode', () => {
     }
   }, 120_000);
 
+  it('lists the coordinate systems usable at a point, most local first', async () => {
+    const proj = await createProjNode({ dataDir: DATA_DIR });
+    try {
+      const tokyo = await proj.listCrs(139.7671, 35.6812, { authorities: ['EPSG'] });
+
+      const ids = tokyo.map((crs) => crs.id);
+      // Japan Plane Rectangular CS IX covers Tokyo; CS I covers Kyushu, and a
+      // list that offers it here is worse than no list at all.
+      expect(ids).toContain('EPSG:6677');
+      expect(ids).not.toContain('EPSG:6669');
+      expect(ids).not.toContain('EPSG:27700');
+
+      // Most local first is the whole point of the ordering.
+      const areas = tokyo
+        .map((crs) => crs.areaSquareDegrees ?? Number.POSITIVE_INFINITY);
+      expect(areas).toEqual([...areas].sort((a, b) => a - b));
+
+      const plane = tokyo.find((crs) => crs.id === 'EPSG:6677')!;
+      expect(plane.type).toBe('projected');
+      expect(plane.name).toMatch(/IX/);
+      expect(plane.areaName).toBeTruthy();
+    } finally {
+      proj.dispose();
+    }
+  }, 120_000);
+
+  it('keeps vertical systems out of the horizontal list unless asked', async () => {
+    const proj = await createProjNode({ dataDir: DATA_DIR });
+    try {
+      const horizontal = await proj.listCrs(139.7671, 35.6812, { authorities: ['EPSG'] });
+      expect(horizontal.some((crs) => crs.type === 'vertical')).toBe(false);
+
+      const vertical = await proj.listCrs(139.7671, 35.6812, {
+        kinds: { horizontal: false, vertical: true },
+        authorities: ['EPSG', 'CZM'],
+      });
+      expect(vertical.length).toBeGreaterThan(0);
+      expect(vertical.every((crs) => crs.type === 'vertical')).toBe(true);
+      // The customised authority is where JGD2024 lives.
+      expect(vertical.map((crs) => crs.id)).toContain('CZM:JGD2024');
+    } finally {
+      proj.dispose();
+    }
+  }, 120_000);
+
   it('refuses a ballpark answer by default, as the browser does', async () => {
     /*
      * Even with the whole proj-data directory mounted there is no accurate
@@ -121,7 +172,7 @@ withData('createProjNode', () => {
      * The default refuses it here exactly as it does in the browser, which is
      * the property that makes the two interchangeable.
      */
-    const proj = await createProjNode({ dataDir: DATA_DIR, moduleUrl: WASM });
+    const proj = await createProjNode({ dataDir: DATA_DIR });
     try {
       const refusal = await proj
         .transform('EPSG:4301', 'EPSG:6668', 139.7671, 35.6812)

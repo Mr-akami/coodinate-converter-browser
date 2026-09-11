@@ -6,20 +6,17 @@
  * part of that decision.
  */
 
-/**
- * @typedef {{
- *   version: string,
- *   manifestPublished: boolean,
- *   projDbPublished: boolean,
- *   installedAt: number,
- * }} Generation
- */
+export interface Generation {
+  version: string;
+  manifestPublished: boolean;
+  projDbPublished: boolean;
+  installedAt: number;
+}
 
-/**
- * @param {Generation[]} generations
- * @returns {string | null} the newest complete Data Version, or null
- */
-export function selectNewestCompleteVersion(generations) {
+/** @returns the newest complete Data Version, or null */
+export function selectNewestCompleteVersion(
+  generations: Generation[],
+): string | null {
   const complete = generations.filter(
     (generation) => generation.manifestPublished && generation.projDbPublished,
   );

@@ -1,4 +1,4 @@
-import { createProj } from '../src/proj-runtime.js';
+import { createProj } from '/dist/lib/index.js';
 
 const logEl = document.querySelector('#log');
 

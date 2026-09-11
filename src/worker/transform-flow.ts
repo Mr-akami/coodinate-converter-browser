@@ -13,19 +13,23 @@
 
 import { MissingGridError } from '../errors.js';
 import { createLru } from './lru.js';
+import type {
+  Coordinate, CrsInfo, CrsKinds, EnumeratedGrid, GridProvider, GridRef,
+  Manifest, OperationInfo, PairSpec, ProjModule,
+} from '../types.js';
 
 // One entry per (CRS pair, 1 degree cell). Bounded so a long session cannot
 // grow it without limit; large enough to keep neighbouring points cache-hot.
 const PREPARE_CACHE_CAPACITY = 64;
 const PRELOAD_BATCH_SIZE = 6;
 
-function basenameOf(path) {
+function basenameOf(path: string | undefined): string {
   if (!path || typeof path !== 'string') return '';
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return slash >= 0 ? path.slice(slash + 1) : path;
 }
 
-function nameFromUrl(url) {
+function nameFromUrl(url: string | undefined): string {
   if (!url || typeof url !== 'string') return '';
   const slash = url.lastIndexOf('/');
   if (slash < 0) return '';
@@ -36,37 +40,54 @@ function nameFromUrl(url) {
 
 // PROJ reports fullName as an absolute path when the grid is on disk and as
 // "" when it is not, so the Manifest name comes from whichever field has it.
-function resolveGridName(grid) {
+function resolveGridName(grid: EnumeratedGrid): string {
   return basenameOf(grid.fullName) || nameFromUrl(grid.url) || grid.shortName || '';
 }
 
-/**
- * @param {{
- *   projModule: {
- *     gridsNeeded: (src: string, dst: string, x: number, y: number, discardMissing: number) => Array<object>,
- *     strictCheck: (src: string, dst: string, x: number, y: number) => number,
- *     transform: (src: string, dst: string, x: number, y: number, z: number) => {x: number, y: number, z: number},
- *     refreshAfterGridWrite: () => void,
- *   },
- *   gridProvider: {
- *     isMounted: (name: string) => boolean,
- *     ensureGrid: (name: string, options?: {signal?: AbortSignal}) => Promise<void>,
- *   },
- *   manifest: {grids: Record<string, {size: number, sha256: string}>},
- * }} deps
- */
-export function createTransformFlow({ projModule, gridProvider, manifest }) {
-  const preparedGridSets = createLru(PREPARE_CACHE_CAPACITY);
+export interface TransformFlow {
+  transform(request: {
+    src: string; dst: string; x: number; y: number; z: number;
+    allowBallpark?: boolean; signal?: AbortSignal;
+  }): Promise<Coordinate>;
+  transformMany(request: {
+    src: string; dst: string; xyz: Float64Array;
+    allowBallpark?: boolean; signal?: AbortSignal;
+  }): Promise<Float64Array>;
+  describe(request: {
+    src: string; dst: string; x?: number; y?: number;
+    allowBallpark?: boolean; signal?: AbortSignal;
+  }): Promise<OperationInfo>;
+  preloadGrids(
+    spec: 'all' | PairSpec[],
+    options?: {
+      onProgress?: (event: { done: number; total: number }) => void;
+      signal?: AbortSignal;
+    },
+  ): Promise<{ fetched: number }>;
+  listCrs(request: {
+    lon: number; lat: number; kinds?: CrsKinds; authorities?: string[] | null;
+  }): CrsInfo[];
+  clearPrepareCache(): void;
+}
+
+export function createTransformFlow({ projModule, gridProvider, manifest }: {
+  projModule: ProjModule;
+  gridProvider: GridProvider;
+  manifest: Manifest;
+}): TransformFlow {
+  const preparedGridSets = createLru<string, GridRef[]>(PREPARE_CACHE_CAPACITY);
   // Once a pair is known to have an instantiable non-ballpark operation with
   // the mounted grids, repeat calls skip the check until grids change.
-  const strictCheckedOk = new Set();
+  const strictCheckedOk = new Set<string>();
 
-  function refreshMounts() {
+  function refreshMounts(): void {
     projModule.refreshAfterGridWrite();
     strictCheckedOk.clear();
   }
 
-  function prepareGridSet(src, dst, x, y, strict) {
+  function prepareGridSet(
+    src: string, dst: string, x: number, y: number, strict: boolean,
+  ): GridRef[] {
     /*
      * The cache key carries a coarse coordinate cell because PROJ picks a
      * different regional operation per point (NAD27 to WGS84 needs HPGN-NY in
@@ -80,7 +101,7 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     const cached = preparedGridSets.get(key);
     if (cached) return cached;
 
-    let enumerated;
+    let enumerated: EnumeratedGrid[];
     try {
       enumerated = projModule.gridsNeeded(src, dst, x, y, 0);
     } catch (err) {
@@ -99,8 +120,10 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     return grids;
   }
 
-  function followUpGrids(src, dst, x, y, missing) {
-    let enumerated;
+  function followUpGrids(
+    src: string, dst: string, x: number, y: number, missing: GridRef[],
+  ): GridRef[] {
+    let enumerated: EnumeratedGrid[];
     try {
       enumerated = projModule.gridsNeeded(src, dst, x, y, 1);
     } catch {
@@ -109,7 +132,7 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
       return [];
     }
 
-    const extra = [];
+    const extra: GridRef[] = [];
     for (const grid of enumerated) {
       const name = resolveGridName(grid);
       if (!name || !manifest.grids[name] || gridProvider.isMounted(name)) continue;
@@ -129,7 +152,7 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
    * directory, has no Manifest and therefore nothing it could obtain, so
    * anything missing there is permanent by definition.
    */
-  function verifyStrictOperation(src, dst, x, y) {
+  function verifyStrictOperation(src: string, dst: string, x: number, y: number): void {
     const pairKey = `${src}|${dst}`;
     if (strictCheckedOk.has(pairKey)) return;
 
@@ -170,7 +193,10 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
    * and transformMany so both see the same grids; the only difference is how
    * many points come back.
    */
-  async function ensureGridsFor({ src, dst, x, y, allowBallpark, signal }) {
+  async function ensureGridsFor({ src, dst, x, y, allowBallpark, signal }: {
+    src: string; dst: string; x: number; y: number;
+    allowBallpark?: boolean; signal?: AbortSignal;
+  }): Promise<void> {
     const strict = !allowBallpark;
     const grids = prepareGridSet(src, dst, x, y, strict);
     const missing = grids.filter(
@@ -207,11 +233,10 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     if (strict) verifyStrictOperation(src, dst, x, y);
   }
 
-  /**
-   * @param {{src: string, dst: string, x: number, y: number, z: number,
-   *          allowBallpark?: boolean, signal?: AbortSignal}} request
-   */
-  async function transform({ src, dst, x, y, z, allowBallpark = false, signal }) {
+  async function transform({ src, dst, x, y, z, allowBallpark = false, signal }: {
+    src: string; dst: string; x: number; y: number; z: number;
+    allowBallpark?: boolean; signal?: AbortSignal;
+  }): Promise<Coordinate> {
     await ensureGridsFor({ src, dst, x, y, allowBallpark, signal });
     return projModule.transform(src, dst, x, y, z, allowBallpark);
   }
@@ -225,10 +250,11 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
    * point needing a grid the first point did not is reported rather than
    * silently downgraded.
    *
-   * @param {{src: string, dst: string, xyz: Float64Array,
-   *          allowBallpark?: boolean, signal?: AbortSignal}} request
    */
-  async function transformMany({ src, dst, xyz, allowBallpark = false, signal }) {
+  async function transformMany({ src, dst, xyz, allowBallpark = false, signal }: {
+    src: string; dst: string; xyz: Float64Array;
+    allowBallpark?: boolean; signal?: AbortSignal;
+  }): Promise<Float64Array> {
     if (!(xyz instanceof Float64Array)) {
       throw new TypeError('transformMany: xyz must be a Float64Array');
     }
@@ -243,11 +269,10 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     return projModule.transformMany(src, dst, xyz, allowBallpark);
   }
 
-  /**
-   * @param {{src: string, dst: string, x?: number, y?: number,
-   *          allowBallpark?: boolean, signal?: AbortSignal}} request
-   */
-  async function describe({ src, dst, x = NaN, y = NaN, allowBallpark = true, signal }) {
+  async function describe({ src, dst, x = NaN, y = NaN, allowBallpark = true, signal }: {
+    src: string; dst: string; x?: number; y?: number;
+    allowBallpark?: boolean; signal?: AbortSignal;
+  }): Promise<OperationInfo> {
     // Describing is a question, not a transform, so it fetches grids first:
     // otherwise it would report the operation available before the fetch and
     // a caller would act on a stale answer.
@@ -255,15 +280,20 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     return projModule.describe(src, dst, x, y, allowBallpark);
   }
 
-  function resolvePreloadNames(spec) {
+  function resolvePreloadNames(spec: 'all' | PairSpec[]): string[] {
     if (spec === 'all') return Object.keys(manifest.grids);
     if (!Array.isArray(spec)) {
       throw new Error('preloadGrids: spec must be "all" or an array of {src,dst,x?,y?}');
     }
 
-    const names = new Set();
+    const names = new Set<string>();
     for (const pair of spec) {
-      for (const grid of projModule.gridsNeeded(pair.src, pair.dst, pair.x, pair.y, 0)) {
+      // A pair without a point asks PROJ for the grids of the operation it
+      // would pick with no coordinate to go on; NaN is how the C side says so.
+      const enumerated = projModule.gridsNeeded(
+        pair.src, pair.dst, pair.x ?? NaN, pair.y ?? NaN, 0,
+      );
+      for (const grid of enumerated) {
         const name = resolveGridName(grid);
         if (name && !grid.available) names.add(name);
       }
@@ -271,11 +301,13 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     return [...names];
   }
 
-  /**
-   * @param {'all' | Array<{src: string, dst: string, x?: number, y?: number}>} spec
-   * @param {{onProgress?: (event: {done: number, total: number}) => void, signal?: AbortSignal}} [options]
-   */
-  async function preloadGrids(spec, options = {}) {
+  async function preloadGrids(
+    spec: 'all' | PairSpec[],
+    options: {
+      onProgress?: (event: { done: number; total: number }) => void;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<{ fetched: number }> {
     const { onProgress, signal } = options;
     const names = resolvePreloadNames(spec);
     if (names.length === 0) {
@@ -295,9 +327,36 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     return { fetched: done };
   }
 
-  function clearPrepareCache() {
+  /*
+   * The coordinate systems usable at a point, most local first.
+   *
+   * Ordering by area matters more than it looks: at any populated point the
+   * database offers a world-wide system and a local one, and the local one is
+   * almost always the right answer. Sorting here rather than in each caller
+   * means every caller gets that for free.
+   */
+  function listCrs({ lon, lat, kinds = {}, authorities = null }: {
+    lon: number; lat: number; kinds?: CrsKinds; authorities?: string[] | null;
+  }): CrsInfo[] {
+    const bits = (kinds.horizontal === false ? 0 : 1)
+      | (kinds.vertical ? 2 : 0)
+      | (kinds.threeDimensional ? 4 : 0);
+
+    const list = projModule.listCrs(
+      lon, lat, bits, authorities && authorities.length ? authorities.join(',') : null,
+    );
+
+    return list.sort((a, b) => {
+      const areaA = a.areaSquareDegrees ?? Number.POSITIVE_INFINITY;
+      const areaB = b.areaSquareDegrees ?? Number.POSITIVE_INFINITY;
+      if (areaA !== areaB) return areaA - areaB;
+      return a.id.localeCompare(b.id);
+    });
+  }
+
+  function clearPrepareCache(): void {
     preparedGridSets.clear();
   }
 
-  return { transform, transformMany, describe, preloadGrids, clearPrepareCache };
+  return { transform, transformMany, describe, listCrs, preloadGrids, clearPrepareCache };
 }

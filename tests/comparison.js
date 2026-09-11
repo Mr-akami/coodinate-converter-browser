@@ -1,4 +1,4 @@
-import { createProj } from '../src/proj-runtime.js';
+import { createProj } from '/dist/lib/index.js';
 
 /*
  * The reference values come from cs2cs, which falls back to a ballpark

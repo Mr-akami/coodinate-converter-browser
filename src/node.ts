@@ -14,13 +14,13 @@
  */
 
 import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
-import { createProjApi } from './proj-api.js';
+import { createProjApi, type Proj } from './proj-api.js';
 import { createRpc } from './rpc.js';
+import type { RpcPort } from './types.js';
 
 export {
   MissingGridError,
@@ -30,6 +30,10 @@ export {
 
 const MEMFS_MOUNT = '/proj-data';
 
+/* Assembled rather than written literally; see the note in proj-runtime.ts. */
+const WASM_MODULE_PATH = ['..', 'proj_wasm.js'].join('/');
+const NODE_WORKER_PATH = ['.', 'node-worker.js'].join('/');
+
 let warnedAboutProjLib = false;
 
 /**
@@ -37,18 +41,18 @@ let warnedAboutProjLib = false;
  * PROJ deprecated PROJ_LIB in favour of PROJ_DATA, but a great many machines
  * still set only the old one, so it is accepted with a warning rather than
  * ignored.
- *
- * @param {string | undefined} explicit
- * @returns {string}
  */
-export function resolveDataDir(explicit, env = process.env) {
+export function resolveDataDir(
+  explicit: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+): string {
   const candidates = [
     { value: explicit, from: 'the dataDir option' },
     { value: env.PROJ_DATA, from: 'PROJ_DATA' },
     { value: env.PROJ_LIB, from: 'PROJ_LIB' },
   ];
 
-  const tried = [];
+  const tried: string[] = [];
   for (const { value, from } of candidates) {
     if (!value) continue;
     const dir = isAbsolute(value) ? value : resolve(process.cwd(), value);
@@ -71,23 +75,19 @@ export function resolveDataDir(explicit, env = process.env) {
   );
 }
 
-/**
- * @param {{
- *   dataDir?: string,
- *   inProcess?: boolean,
- *   wasmUrl?: string,
- *   moduleUrl?: string,
- * }} [options]
- */
 export async function createProjNode({
   dataDir,
   inProcess = false,
   moduleUrl,
-} = {}) {
+}: {
+  dataDir?: string;
+  inProcess?: boolean;
+  moduleUrl?: string;
+} = {}): Promise<Proj> {
   const resolvedDataDir = resolveDataDir(dataDir);
   const resolvedModuleUrl = moduleUrl
     ? new URL(moduleUrl, import.meta.url).href
-    : new URL('../dist/proj_wasm.js', import.meta.url).href;
+    : new URL(WASM_MODULE_PATH, import.meta.url).href;
 
   const init = {
     type: 'init',
@@ -101,7 +101,7 @@ export async function createProjNode({
     : createWorkerThreadTransport();
 
   const rpc = createRpc(transport);
-  let ready;
+  let ready: { manifest: { version: string } };
   try {
     ready = await rpc.request(init);
   } catch (err) {
@@ -116,18 +116,18 @@ export async function createProjNode({
  * event loop blocked by a batch of transforms. inProcess is for scripts and
  * command line tools, where a thread buys nothing.
  */
-function createWorkerThreadTransport() {
-  const workerPath = fileURLToPath(new URL('./node-worker.js', import.meta.url));
+function createWorkerThreadTransport(): RpcPort {
+  const workerPath = fileURLToPath(new URL(NODE_WORKER_PATH, import.meta.url));
   const worker = new Worker(workerPath);
   worker.unref();
 
   return {
-    addEventListener(type, handler) {
+    addEventListener(type: string, handler: (event: any) => void) {
       if (type === 'message') worker.on('message', (data) => handler({ data }));
       else if (type === 'error') worker.on('error', (error) => handler(error));
     },
-    postMessage(message, transfer) {
-      worker.postMessage(message, transfer);
+    postMessage(message: unknown, transfer?: Transferable[]) {
+      worker.postMessage(message, transfer as never);
     },
     terminate() {
       void worker.terminate();
@@ -140,20 +140,17 @@ function createWorkerThreadTransport() {
  * delivered on the next tick, so callers cannot tell the difference beyond
  * the event loop being occupied while a transform runs.
  */
-async function createInProcessTransport() {
-  const require = createRequire(import.meta.url);
-  void require;
+async function createInProcessTransport(): Promise<RpcPort> {
   const { createNodeSession } = await import('./worker/node-session.js');
   const session = createNodeSession();
 
-  /** @type {Set<(event: {data: unknown}) => void>} */
-  const listeners = new Set();
+  const listeners = new Set<(event: { data: unknown }) => void>();
 
   return {
-    addEventListener(type, handler) {
+    addEventListener(type: string, handler: (event: any) => void) {
       if (type === 'message') listeners.add(handler);
     },
-    postMessage(message) {
+    postMessage(message: unknown) {
       session
         .handle(message)
         .then((reply) => {

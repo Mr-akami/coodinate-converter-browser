@@ -6,14 +6,11 @@
 // EEXIST is 20 in its ERRNO_CODES table.
 const EEXIST = 20;
 
-/**
- * @param {{mkdir: (path: string) => void}} fs Emscripten `Module.FS`
- * @param {string} path
- */
-export function ensureMemfsDir(fs, path) {
+/** @param fs Emscripten `Module.FS` */
+export function ensureMemfsDir(fs: { mkdir(path: string): void }, path: string): void {
   try {
     fs.mkdir(path);
   } catch (err) {
-    if (!err || err.errno !== EEXIST) throw err;
+    if (!err || (err as { errno?: number }).errno !== EEXIST) throw err;
   }
 }

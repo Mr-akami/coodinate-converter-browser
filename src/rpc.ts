@@ -8,10 +8,29 @@
  * AbortSignal instead, which also tells the worker to stop the work.
  */
 
-import { MISSING_GRID_REASONS, MissingGridError, ProjWorkerError } from './errors.js';
+import {
+  MISSING_GRID_REASONS, MissingGridError, ProjWorkerError,
+  type MissingGridReason,
+} from './errors.js';
+import type { Rpc, RpcPort, RpcRequestOptions } from './types.js';
 
-function buildReplyError(data) {
-  if (MISSING_GRID_REASONS.includes(data.errorKind)) {
+interface WorkerReply {
+  id?: unknown;
+  type?: string;
+  error?: string;
+  errorKind?: MissingGridReason;
+  missingGrids?: import('./types.js').GridRef[];
+}
+
+interface PendingRequest {
+  resolve: (value: any) => void;
+  reject: (reason: unknown) => void;
+  detach: () => void;
+  onProgress?: RpcRequestOptions['onProgress'];
+}
+
+function buildReplyError(data: WorkerReply): Error {
+  if (data.errorKind && MISSING_GRID_REASONS.includes(data.errorKind)) {
     return new MissingGridError(data.error || data.errorKind, {
       reason: data.errorKind,
       missingGrids: data.missingGrids,
@@ -20,21 +39,12 @@ function buildReplyError(data) {
   return new Error(data.error || 'proj worker request failed');
 }
 
-/**
- * @param {{
- *   postMessage: (message: unknown) => void,
- *   addEventListener: (type: string, handler: (event: any) => void) => void,
- *   removeEventListener: (type: string, handler: (event: any) => void) => void,
- * }} port
- */
-export function createRpc(port) {
-  /** @type {Map<unknown, {resolve: Function, reject: Function, detach: () => void, onProgress?: Function}>} */
-  const pending = new Map();
+export function createRpc(port: RpcPort): Rpc {
+  const pending = new Map<number, PendingRequest>();
   let nextId = 0;
-  /** @type {ProjWorkerError | null} */
-  let disposedWith = null;
+  let disposedWith: ProjWorkerError | null = null;
 
-  function dispose(error) {
+  function dispose(error: ProjWorkerError) {
     disposedWith = error;
     for (const entry of pending.values()) {
       entry.detach();
@@ -43,21 +53,21 @@ export function createRpc(port) {
     pending.clear();
   }
 
-  port.addEventListener('message', (event) => {
+  port.addEventListener('message', (event: { data: WorkerReply }) => {
     const data = event.data;
-    const entry = pending.get(data?.id);
+    const entry = pending.get(data?.id as number);
     if (!entry) return;
     if (data.type === 'progress') {
-      if (entry.onProgress) entry.onProgress(data);
+      if (entry.onProgress) entry.onProgress(data as never);
       return;
     }
-    pending.delete(data.id);
+    pending.delete(data.id as number);
     entry.detach();
     if (data.type === 'error') entry.reject(buildReplyError(data));
     else entry.resolve(data);
   });
 
-  port.addEventListener('error', (event) => {
+  port.addEventListener('error', (event: { message?: string }) => {
     dispose(new ProjWorkerError(`proj worker failed: ${event?.message ?? 'unknown error'}`));
   });
 
@@ -65,22 +75,21 @@ export function createRpc(port) {
     dispose(new ProjWorkerError('proj worker sent a message that could not be deserialised'));
   });
 
-  /**
-   * @param {Record<string, unknown>} message
-   * @param {{signal?: AbortSignal, onProgress?: (event: any) => void}} [options]
-   */
-  function request(message, options = {}) {
+  function request<T = any>(
+    message: Record<string, unknown>,
+    options: RpcRequestOptions = {},
+  ): Promise<T> {
     if (disposedWith) return Promise.reject(disposedWith);
 
     const id = nextId++;
-    return new Promise((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
       const { signal, onProgress } = options;
 
       const onAbort = () => {
         pending.delete(id);
         detach();
         port.postMessage({ type: 'abort', id });
-        reject(signal.reason);
+        reject(signal!.reason);
       };
       const detach = () => {
         if (signal) signal.removeEventListener('abort', onAbort);
@@ -98,7 +107,7 @@ export function createRpc(port) {
       // `transfer` names buffers to move rather than copy; it is a delivery
       // detail, so it never reaches the worker as part of the message.
       const { transfer, ...body } = message;
-      port.postMessage({ ...body, id }, transfer || []);
+      port.postMessage({ ...body, id }, (transfer as Transferable[]) || []);
     });
   }
 

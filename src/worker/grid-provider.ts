@@ -13,31 +13,36 @@
 
 import { DataVerificationError, MissingGridError } from '../errors.js';
 import { ensureMemfsDir } from './memfs.js';
+import type {
+  DataStore, FetchImpl, GridProvider, GridRef, Manifest,
+} from '../types.js';
 import { responseChunks, writeVerifiedFile } from './verified-write.js';
 
 const MOUNT_ROOT = '/proj-grid-mounts';
 
-/**
- * @param {{
- *   store: object,
- *   fs: object,
- *   memfsPath: string,
- *   dataVersion: string,
- *   gridsBaseUrl: string,
- *   manifest: {grids: Record<string, {size: number, sha256: string}>},
- *   fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
- * }} config
- */
+export interface WorkerGridProvider extends GridProvider {
+  mountPublishedGrids(): Promise<number>;
+}
+
 export function createGridProvider({
   store, fs, memfsPath, dataVersion, gridsBaseUrl, manifest, fetchImpl,
-}) {
-  /** @type {Set<string>} The only record of what PROJ can currently see. */
-  const mounted = new Set();
+}: {
+  store: DataStore;
+  fs: any;
+  memfsPath: string;
+  dataVersion: string;
+  gridsBaseUrl: string;
+  manifest: Manifest;
+  fetchImpl: FetchImpl;
+}): WorkerGridProvider {
+  /** The only record of what PROJ can currently see. */
+  const mounted = new Set<string>();
 
-  const gridPath = (name) => `${dataVersion}/grids/${name}`;
-  const gridRef = (name, url) => [{ shortName: name, fullName: name, url }];
+  const gridPath = (name: string) => `${dataVersion}/grids/${name}`;
+  const gridRef = (name: string, url: string): GridRef[] =>
+    [{ shortName: name, fullName: name, url }];
 
-  async function download(name, signal) {
+  async function download(name: string, signal?: AbortSignal) {
     const entry = manifest.grids[name];
     if (!entry) {
       throw new MissingGridError(`grid not in manifest: ${name}`, {
@@ -81,7 +86,7 @@ export function createGridProvider({
     }
   }
 
-  async function mount(name) {
+  async function mount(name: string) {
     const file = await store.getFile(gridPath(name));
     const mountpoint = `${MOUNT_ROOT}/${name}`;
     ensureMemfsDir(fs, MOUNT_ROOT);
@@ -92,23 +97,18 @@ export function createGridProvider({
   }
 
   return {
-    /** @param {string} name */
-    isMounted(name) {
+    isMounted(name: string): boolean {
       return mounted.has(name);
     },
 
-    /**
-     * @param {string} name
-     * @param {{signal?: AbortSignal}} [options]
-     */
-    async ensureGrid(name, options = {}) {
+    async ensureGrid(name: string, options: { signal?: AbortSignal } = {}): Promise<void> {
       if (mounted.has(name)) return;
       if (!(await store.isPublished(gridPath(name)))) await download(name, options.signal);
       await mount(name);
     },
 
-    /** Mounts what previous visits already stored. @returns {Promise<number>} */
-    async mountPublishedGrids() {
+    /** Mounts what previous visits already stored. */
+    async mountPublishedGrids(): Promise<number> {
       let count = 0;
       for (const entry of await store.list(`${dataVersion}/grids`)) {
         // Listing returns the sidecars too; skipping them here halves the

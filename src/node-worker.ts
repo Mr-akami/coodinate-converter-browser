@@ -10,8 +10,11 @@ import { createNodeSession } from './worker/node-session.js';
 
 const session = createNodeSession();
 
-parentPort.on('message', async (message) => {
+if (!parentPort) throw new Error('node-worker must run as a worker thread');
+const port = parentPort;
+
+port.on('message', async (message: unknown) => {
   const reply = await session.handle(message);
-  const { transfer, ...body } = reply;
-  parentPort.postMessage(body, transfer || []);
+  const { transfer, ...body } = reply as { transfer?: Transferable[] };
+  port.postMessage(body, (transfer as never) || []);
 });

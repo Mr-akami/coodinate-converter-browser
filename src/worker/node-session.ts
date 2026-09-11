@@ -12,7 +12,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { createProjModule } from './proj-module.js';
-import { createTransformFlow } from './transform-flow.js';
+import { createTransformFlow, type TransformFlow } from './transform-flow.js';
+import type { GridProvider } from '../types.js';
 
 /*
  * Every grid the directory holds is already visible to PROJ, so the flow's
@@ -20,7 +21,7 @@ import { createTransformFlow } from './transform-flow.js';
  * special-casing Node inside the flow, keeps the transform path identical in
  * both environments.
  */
-const everythingPresent = {
+const everythingPresent: GridProvider = {
   isMounted: () => true,
   ensureGrid: async () => undefined,
 };
@@ -30,21 +31,21 @@ const everythingPresent = {
  * here means a server and a browser reporting the same version really are
  * reading the same database.
  */
-async function dataVersionOf(dbPath) {
+async function dataVersionOf(dbPath: string): Promise<string> {
   const bytes = await readFile(dbPath);
   return createHash('sha256').update(bytes).digest('hex').slice(0, 16);
 }
 
 export function createNodeSession() {
-  let flow = null;
-  let dataVersion = null;
+  let flow: TransformFlow | null = null;
+  let dataVersion: string | null = null;
 
-  function requireFlow() {
+  function requireFlow(): TransformFlow {
     if (!flow) throw new Error('proj runtime is not initialised');
     return flow;
   }
 
-  async function init(message) {
+  async function init(message: any) {
     const { dataDir, memfsPath } = message.node;
     dataVersion = await dataVersionOf(join(dataDir, 'proj.db'));
 
@@ -63,18 +64,18 @@ export function createNodeSession() {
       gridProvider: everythingPresent,
       // The flow consults the Manifest only to decide whether a missing grid
       // is worth fetching, and nothing here is ever missing.
-      manifest: { version: dataVersion, grids: {} },
+      manifest: { version: dataVersion, grids: {}, projDb: { size: 0, sha256: '' } },
     });
 
     return { type: 'ready', manifest: { version: dataVersion }, dataVersion };
   }
 
-  async function handle(message) {
+  async function handle(message: any) {
     const reply = await route(message);
     return { ...reply, id: message.id };
   }
 
-  async function route(message) {
+  async function route(message: any): Promise<any> {
     switch (message.type) {
       case 'init':
         return init(message);
@@ -109,6 +110,16 @@ export function createNodeSession() {
         });
         return { type: 'described', info };
       }
+      case 'listCrs':
+        return {
+          type: 'crsList',
+          crs: requireFlow().listCrs({
+            lon: message.lon,
+            lat: message.lat,
+            kinds: message.kinds,
+            authorities: message.authorities,
+          }),
+        };
       case 'preloadGrids':
         // Nothing to fetch: the directory is already complete.
         return { type: 'preloaded', fetched: 0 };
@@ -118,7 +129,7 @@ export function createNodeSession() {
   }
 
   return {
-    handle: async (message) => {
+    handle: async (message: any) => {
       try {
         return await handle(message);
       } catch (err) {
@@ -126,8 +137,8 @@ export function createNodeSession() {
           type: 'error',
           id: message.id,
           error: err instanceof Error ? err.message : String(err),
-          errorKind: err?.reason,
-          missingGrids: err?.missingGrids,
+          errorKind: (err as any)?.reason,
+          missingGrids: (err as any)?.missingGrids,
         };
       }
     },

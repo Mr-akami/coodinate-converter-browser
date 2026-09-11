@@ -88,6 +88,24 @@ int pw_transform(const char* src, const char* dst, int allow_ballpark,
 char* pw_describe(const char* src, const char* dst, double x, double y,
                   int allow_ballpark, int* out_status);
 
+/*
+ * pw_list_crs: the coordinate reference systems usable at a point, as JSON.
+ *
+ * Each entry carries its authority, code, name, PROJ type, the name of its
+ * area of use and that area's size in square degrees. The caller decides how
+ * to present them; the area is included because the useful order is smallest
+ * first, a local plane system being a better answer than a world-wide one.
+ *
+ * Entries whose area of use does not contain the point are excluded, as are
+ * deprecated ones. `kinds` selects what to list: 1 horizontal (geographic 2D
+ * and projected), 2 vertical, 4 geographic 3D and compound; OR them together.
+ *
+ * Returns a malloc'd NUL-terminated string the caller frees, or NULL. Sets
+ * *out_status to 0 on success, -1 for a bad argument, -2 on a database error.
+ */
+char* pw_list_crs(double lon, double lat, int kinds, const char* authorities,
+                  int* out_status);
+
 int pw_transform_many(const char* src, const char* dst, int allow_ballpark,
                       double* xyz, int count);
 

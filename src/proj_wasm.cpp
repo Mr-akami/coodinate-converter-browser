@@ -296,6 +296,19 @@ bool contains(const std::vector<std::string>& names, const char* name) {
   return false;
 }
 
+/* PJ_TYPE as a name a caller can group or filter on without knowing PROJ. */
+const char* crs_type_name(PJ_TYPE type) {
+  switch (type) {
+    case PJ_TYPE_GEOGRAPHIC_2D_CRS: return "geographic2d";
+    case PJ_TYPE_GEOGRAPHIC_3D_CRS: return "geographic3d";
+    case PJ_TYPE_PROJECTED_CRS: return "projected";
+    case PJ_TYPE_VERTICAL_CRS: return "vertical";
+    case PJ_TYPE_COMPOUND_CRS: return "compound";
+    case PJ_TYPE_GEOCENTRIC_CRS: return "geocentric";
+    default: return "other";
+  }
+}
+
 char* duplicate(const std::string& text) {
   char* copy = static_cast<char*>(std::malloc(text.size() + 1));
   if (!copy) return nullptr;
@@ -657,6 +670,132 @@ char* pw_describe(const char* src, const char* dst, double x, double y,
   }
   std::free(grids);
   json.push_back('}');
+
+  char* result = duplicate(json);
+  if (!result) return nullptr;
+  *out_status = 0;
+  return result;
+}
+
+/* Bit flags for pw_list_crs's `kinds`; see src/proj_wasm.h. */
+enum {
+  kCrsHorizontal = 1,
+  kCrsVertical = 2,
+  kCrsThreeDimensional = 4,
+};
+
+/*
+ * Names that mean "we could not identify the datum". PROJ carries them so the
+ * database is complete; offering them to someone choosing a CRS is noise.
+ */
+bool is_unidentified_datum(const char* name) {
+  if (!name) return true;
+  return std::strncmp(name, "Unknown datum", 13) == 0 ||
+         std::strncmp(name, "Unspecified datum", 17) == 0;
+}
+
+bool authority_allowed(const char* auth_name, const std::string& allowed) {
+  if (allowed.empty()) return true;
+  if (!auth_name) return false;
+  /* Comma-separated, matched whole: "EPSG" must not match "EPSG_HISTORIC". */
+  const std::string needle = std::string(",") + auth_name + ",";
+  const std::string haystack = "," + allowed + ",";
+  return haystack.find(needle) != std::string::npos;
+}
+
+char* pw_list_crs(double lon, double lat, int kinds, const char* authorities,
+                  int* out_status) {
+  if (!out_status) return nullptr;
+  *out_status = -1;
+  if (std::isnan(lon) || std::isnan(lat)) return nullptr;
+
+  WrapperState& s = state();
+  if (!s.ctx) return nullptr;
+
+  std::vector<PJ_TYPE> types;
+  if (kinds & kCrsHorizontal) {
+    types.push_back(PJ_TYPE_GEOGRAPHIC_2D_CRS);
+    types.push_back(PJ_TYPE_PROJECTED_CRS);
+  }
+  if (kinds & kCrsVertical) {
+    types.push_back(PJ_TYPE_VERTICAL_CRS);
+  }
+  if (kinds & kCrsThreeDimensional) {
+    types.push_back(PJ_TYPE_GEOGRAPHIC_3D_CRS);
+    types.push_back(PJ_TYPE_COMPOUND_CRS);
+  }
+  if (types.empty()) return nullptr;
+
+  PROJ_CRS_LIST_PARAMETERS* params = proj_get_crs_list_parameters_create();
+  if (!params) {
+    *out_status = -2;
+    return nullptr;
+  }
+  params->types = types.data();
+  params->typesCount = types.size();
+  params->allow_deprecated = 0;
+  /* A degenerate bounding box is the point itself; "area contains the box"
+     then means "area contains the point", which is the question being asked. */
+  params->bbox_valid = 1;
+  params->west_lon_degree = lon;
+  params->east_lon_degree = lon;
+  params->south_lat_degree = lat;
+  params->north_lat_degree = lat;
+  params->crs_area_of_use_contains_bbox = 1;
+
+  int count = 0;
+  PROJ_CRS_INFO** list =
+      proj_get_crs_info_list_from_database(s.ctx.get(), nullptr, params, &count);
+  proj_get_crs_list_parameters_destroy(params);
+  if (!list) {
+    *out_status = -2;
+    return nullptr;
+  }
+
+  const std::string allowed = authorities ? authorities : "";
+  std::string json = "[";
+  bool first = true;
+
+  for (int i = 0; i < count; ++i) {
+    const PROJ_CRS_INFO* info = list[i];
+    if (!info || !info->auth_name || !info->code) continue;
+    if (!authority_allowed(info->auth_name, allowed)) continue;
+    if (is_unidentified_datum(info->name)) continue;
+
+    if (!first) json.push_back(',');
+    first = false;
+
+    json += "{\"id\":";
+    append_json_string(&json, (std::string(info->auth_name) + ":" + info->code).c_str());
+    json += ",\"authority\":";
+    append_json_string(&json, info->auth_name);
+    json += ",\"code\":";
+    append_json_string(&json, info->code);
+    json += ",\"name\":";
+    append_json_string(&json, info->name ? info->name : "");
+    json += ",\"type\":";
+    append_json_string(&json, crs_type_name(info->type));
+    json += ",\"areaName\":";
+    append_json_string(&json, info->area_name ? info->area_name : "");
+    json += ",\"areaSquareDegrees\":";
+    if (info->bbox_valid) {
+      /* An area crossing the antimeridian is stored with east < west, so a
+         plain subtraction makes a world-wide CRS look like the most local one
+         available and sorts it to the top of a chooser. */
+      double width = info->east_lon_degree - info->west_lon_degree;
+      if (width < 0.0) width += 360.0;
+      const double height = info->north_lat_degree - info->south_lat_degree;
+      char buffer[64];
+      std::snprintf(buffer, sizeof(buffer), "%.6g", std::fabs(width * height));
+      json += buffer;
+    } else {
+      json += "null";
+    }
+    json.push_back('}');
+  }
+
+  proj_crs_info_list_destroy(list);
+  json.push_back(']');
 
   char* result = duplicate(json);
   if (!result) return nullptr;

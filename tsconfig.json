@@ -1,19 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "module": "ES2022",
     "moduleResolution": "bundler",
     "types": ["node"],
     "strict": true,
     "declaration": true,
-    "outDir": "dist",
-    "rootDir": ".",
+    "emitDeclarationOnly": true,
+    "outDir": "types",
     "skipLibCheck": true,
-    // server/index.ts imports its route modules with an explicit .ts extension,
-    // so the extension must be accepted on input and rewritten on emit.
-    "allowImportingTsExtensions": true,
-    "rewriteRelativeImportExtensions": true
+    // server/index.ts imports its route modules with an explicit .ts extension.
+    "allowImportingTsExtensions": true
   },
   "include": ["src", "server"],
   "exclude": ["third_party", "node_modules", "dist", "build"]

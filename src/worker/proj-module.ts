@@ -7,6 +7,9 @@
 
 import { MissingGridError } from '../errors.js';
 import { ensureMemfsDir } from './memfs.js';
+import type {
+  Coordinate, CrsInfo, EnumeratedGrid, OperationInfo, ProjModule,
+} from '../types.js';
 
 // pw_grids_needed status codes: -1 bad argument, -2 CRS, -3 ballpark only.
 const GRIDS_NEEDED_BALLPARK_ONLY = -3;
@@ -19,36 +22,39 @@ const TRANSFORM_BALLPARK_ONLY = 6;
  * that is the only filesystem available there. `nodeDataDir` is the Node path:
  * the real directory is mounted, so PROJ reads proj.db and every grid straight
  * off the disk they already sit on, with nothing copied and nothing to fetch.
- *
- * @param {{moduleUrl: string, wasmUrl?: string, memfsPath: string,
- *          projDbBytes?: Uint8Array, nodeDataDir?: string}} config
  */
 export async function createProjModule({
   moduleUrl, wasmUrl, memfsPath, projDbBytes, nodeDataDir,
-}) {
-  const loaded = await import(moduleUrl);
+}: {
+  moduleUrl: string;
+  wasmUrl?: string;
+  memfsPath: string;
+  projDbBytes?: Uint8Array;
+  nodeDataDir?: string;
+}): Promise<ProjModule> {
+  const loaded: any = await import(/* @vite-ignore */ moduleUrl);
   const createModule = loaded.default || loaded;
 
-  const Module = await createModule({
-    locateFile: (path) => (wasmUrl && path.endsWith('.wasm') ? wasmUrl : path),
+  const Module: any = await createModule({
+    locateFile: (path: string) => (wasmUrl && path.endsWith('.wasm') ? wasmUrl : path),
   });
 
   ensureMemfsDir(Module.FS, memfsPath);
   if (nodeDataDir) {
     Module.FS.mount(Module.NODEFS, { root: nodeDataDir }, memfsPath);
   } else {
-    Module.FS.writeFile(`${memfsPath}/proj.db`, projDbBytes);
+    Module.FS.writeFile(`${memfsPath}/proj.db`, projDbBytes!);
   }
 
   const rc = Module.ccall('pw_init', 'number', ['string'], [memfsPath]);
   if (rc !== 0) throw new Error(`pw_init failed: ${rc}`);
 
-  const coordinate = (value) => (Number.isFinite(value) ? value : NaN);
+  const coordinate = (value: number) => (Number.isFinite(value) ? value : NaN);
 
   return {
     fs: Module.FS,
 
-    gridsNeeded(src, dst, x, y, discardMissing) {
+    gridsNeeded(src: string, dst: string, x: number, y: number, discardMissing: number): EnumeratedGrid[] {
       const statusPtr = Module._malloc(4);
       if (!statusPtr) throw new Error('malloc failed');
       let jsonPtr = 0;
@@ -73,7 +79,7 @@ export async function createProjModule({
       }
     },
 
-    strictCheck(src, dst, x, y) {
+    strictCheck(src: string, dst: string, x: number, y: number): number {
       return Module.ccall(
         'pw_strict_check',
         'number',
@@ -82,7 +88,7 @@ export async function createProjModule({
       );
     },
 
-    transform(src, dst, x, y, z, allowBallpark = true) {
+    transform(src: string, dst: string, x: number, y: number, z: number, allowBallpark = true): Coordinate {
       const ptr = Module._malloc(3 * 8);
       if (!ptr) throw new Error('malloc failed');
       try {
@@ -126,7 +132,7 @@ export async function createProjModule({
      *
      * `xyz` is interleaved x,y,z and is written in place.
      */
-    transformMany(src, dst, xyz, allowBallpark = true) {
+    transformMany(src: string, dst: string, xyz: Float64Array, allowBallpark = true): Float64Array {
       const count = Math.floor(xyz.length / 3);
       if (count === 0) return xyz;
 
@@ -164,7 +170,7 @@ export async function createProjModule({
       }
     },
 
-    describe(src, dst, x, y, allowBallpark = true) {
+    describe(src: string, dst: string, x: number, y: number, allowBallpark = true): OperationInfo {
       const statusPtr = Module._malloc(4);
       if (!statusPtr) throw new Error('malloc failed');
       let jsonPtr = 0;
@@ -186,7 +192,29 @@ export async function createProjModule({
       }
     },
 
-    refreshAfterGridWrite() {
+    listCrs(lon: number, lat: number, kinds: number, authorities: string | null): CrsInfo[] {
+      const statusPtr = Module._malloc(4);
+      if (!statusPtr) throw new Error('malloc failed');
+      let jsonPtr = 0;
+      try {
+        jsonPtr = Module.ccall(
+          'pw_list_crs',
+          'number',
+          ['number', 'number', 'number', 'string', 'number'],
+          [lon, lat, kinds, authorities, statusPtr],
+        );
+        const status = Module.HEAP32[statusPtr >> 2];
+        if (status !== 0 || !jsonPtr) {
+          throw new Error(`pw_list_crs failed: ${status} at ${lon}, ${lat}`);
+        }
+        return JSON.parse(Module.UTF8ToString(jsonPtr));
+      } finally {
+        if (jsonPtr) Module._free(jsonPtr);
+        Module._free(statusPtr);
+      }
+    },
+
+    refreshAfterGridWrite(): void {
       // Recreates the PROJ context so newly mounted grids become visible;
       // this also drops DatabaseContext's cached grid availability.
       const status = Module.ccall('pw_refresh_after_grid_write', 'number', [], []);

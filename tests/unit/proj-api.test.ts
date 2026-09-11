@@ -43,7 +43,8 @@ describe('createProjApi', () => {
     const api = createProjApi(fakeRpc(), manifest);
 
     expect(Object.keys(api).sort()).toEqual([
-      'dataVersion', 'describe', 'dispose', 'prepare', 'transform', 'transformMany',
+      'dataVersion', 'describe', 'dispose', 'listCrs', 'prepare',
+      'transform', 'transformMany',
     ]);
   });
 
@@ -170,6 +171,31 @@ describe('createProjApi', () => {
     // describe answers "what would happen", so refusing to look at a ballpark
     // would make the one case worth asking about unreportable.
     expect(rpc.calls[0]!.message.allowBallpark).toBe(true);
+  });
+
+  it('lists CRS at a point, defaulting to horizontal only', async () => {
+    const crs = [{ id: 'EPSG:6677' }];
+    const rpc = fakeRpc({ type: 'crsList', crs });
+    const api = createProjApi(rpc, manifest);
+
+    const result = await api.listCrs(139.7, 35.6, { authorities: ['EPSG'] });
+
+    expect(result).toBe(crs);
+    expect(rpc.calls[0]!.message).toEqual({
+      type: 'listCrs',
+      lon: 139.7,
+      lat: 35.6,
+      kinds: undefined,
+      authorities: ['EPSG'],
+    });
+  });
+
+  it('rejects a listCrs call without a usable point', async () => {
+    const rpc = fakeRpc();
+    const api = createProjApi(rpc, manifest);
+
+    await expect(api.listCrs(Number.NaN, 35.6)).rejects.toThrow(/lon and lat/);
+    expect(rpc.calls).toEqual([]);
   });
 
   it('disposes the transport underneath it', () => {

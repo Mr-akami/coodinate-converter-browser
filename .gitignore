@@ -37,3 +37,6 @@ third_party/sc-proj-data/
 
 # Generated Data Origin (regenerate with npm run build:data)
 data-dist/
+
+# Generated type declarations (npm run build:types)
+types/

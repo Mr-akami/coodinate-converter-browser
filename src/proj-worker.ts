@@ -12,25 +12,25 @@ import { installProjData } from './worker/data-install.js';
 import { createGridProvider } from './worker/grid-provider.js';
 import { createOpfsStore, createWebLock } from './worker/opfs-store.js';
 import { createProjModule } from './worker/proj-module.js';
-import { createTransformFlow } from './worker/transform-flow.js';
+import { createTransformFlow, type TransformFlow } from './worker/transform-flow.js';
+import type { FetchImpl, ProgressEvent } from './types.js';
 
-let flow = null;
+let flow: TransformFlow | null = null;
 let queue = Promise.resolve();
-/** @type {Map<unknown, AbortController>} */
-const running = new Map();
+const running = new Map<unknown, AbortController>();
 
-const fetchImpl = (url, init) => fetch(url, init);
+const fetchImpl: FetchImpl = (url, init) => fetch(url, init);
 
-function postProgress(id, event) {
+function postProgress(id: unknown, event: ProgressEvent) {
   self.postMessage({ type: 'progress', id, ...event });
 }
 
-function requireFlow() {
+function requireFlow(): TransformFlow {
   if (!flow) throw new Error('proj runtime is not initialised');
   return flow;
 }
 
-async function handleInit(message) {
+async function handleInit(message: any) {
   const { apiBaseUrl, dataDirName, memfsPath, wasmUrl, moduleUrl } = message;
 
   const store = await createOpfsStore(dataDirName);
@@ -67,7 +67,7 @@ async function handleInit(message) {
   return { type: 'ready', manifest, dataVersion };
 }
 
-async function handleTransform(message, signal) {
+async function handleTransform(message: any, signal?: AbortSignal) {
   const result = await requireFlow().transform({
     src: message.src,
     dst: message.dst,
@@ -80,7 +80,7 @@ async function handleTransform(message, signal) {
   return { type: 'result', x: result.x, y: result.y, z: result.z };
 }
 
-async function handleTransformMany(message, signal) {
+async function handleTransformMany(message: any, signal?: AbortSignal) {
   // The array arrives as a transferred buffer and goes back the same way, so
   // a large batch is never copied between threads.
   const xyz = new Float64Array(message.xyz);
@@ -94,7 +94,7 @@ async function handleTransformMany(message, signal) {
   return { type: 'resultMany', xyz: xyz.buffer, transfer: [xyz.buffer] };
 }
 
-async function handleDescribe(message, signal) {
+async function handleDescribe(message: any, signal?: AbortSignal) {
   const info = await requireFlow().describe({
     src: message.src,
     dst: message.dst,
@@ -106,7 +106,19 @@ async function handleDescribe(message, signal) {
   return { type: 'described', info };
 }
 
-async function handlePreloadGrids(message, signal) {
+function handleListCrs(message: any) {
+  return {
+    type: 'crsList',
+    crs: requireFlow().listCrs({
+      lon: message.lon,
+      lat: message.lat,
+      kinds: message.kinds,
+      authorities: message.authorities,
+    }),
+  };
+}
+
+async function handlePreloadGrids(message: any, signal?: AbortSignal) {
   const result = await requireFlow().preloadGrids(message.spec, {
     signal,
     onProgress: (event) => postProgress(message.id, event),
@@ -119,7 +131,7 @@ function handleClearPrepareCache() {
   return { type: 'prepareCacheCleared' };
 }
 
-function route(message, signal) {
+function route(message: any, signal?: AbortSignal): Promise<any> | any {
   switch (message.type) {
     case 'init':
       return handleInit(message);
@@ -129,6 +141,8 @@ function route(message, signal) {
       return handleTransformMany(message, signal);
     case 'describe':
       return handleDescribe(message, signal);
+    case 'listCrs':
+      return handleListCrs(message);
     case 'preloadGrids':
       return handlePreloadGrids(message, signal);
     case 'clearPrepareCache':
@@ -138,8 +152,14 @@ function route(message, signal) {
   }
 }
 
-function errorReply(id, err) {
-  const reply = {
+function errorReply(id: unknown, err: any) {
+  const reply: {
+    type: string;
+    id: unknown;
+    error: string;
+    errorKind?: string;
+    missingGrids?: unknown;
+  } = {
     type: 'error',
     id,
     error: err instanceof Error ? err.message : String(err),
@@ -151,7 +171,7 @@ function errorReply(id, err) {
   return reply;
 }
 
-async function dispatch(message, controller) {
+async function dispatch(message: any, controller: AbortController) {
   try {
     const payload = await route(message, controller.signal);
     // A reply may hand back an ArrayBuffer it wants transferred rather than

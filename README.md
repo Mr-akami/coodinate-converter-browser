@@ -57,10 +57,33 @@ directions, whatever axis order the EPSG registry declares for the CRS.
 | `transformMany(src, dst, xyz, opts?)` | A `Float64Array` of interleaved x,y,z in one round trip. The array you pass is transferred and detached. |
 | `prepare(src, dst, point?, opts?)` | Fetch the grids a later transform will need. |
 | `describe(src, dst, point?, opts?)` | The operation PROJ would use, its stated accuracy, whether it is a ballpark, and the grids it needs. |
+| `listCrs(lon, lat, opts?)` | The coordinate systems usable at that point, most local first. |
 | `dispose()` | Shut the worker down. |
 | `dataVersion` | The Data Version in use. |
 
 `opts` is `{ allowBallpark?: boolean, signal?: AbortSignal }`.
+
+The package is TypeScript, built with Vite and published with declarations.
+
+### Letting a user choose a coordinate system
+
+`listCrs` answers what applies where the user is working, which is the hard
+part of presenting a choice: the database holds ten thousand projected systems
+and perhaps a dozen are relevant.
+
+```js
+const options = await proj.listCrs(139.7671, 35.6812, { authorities: ['EPSG'] });
+// [{ id: 'EPSG:6677', name: 'JGD2011 / Japan Plane Rectangular CS IX',
+//    type: 'projected', areaName: 'Japan - onshore - Honshu ...',
+//    areaSquareDegrees: 10.46 }, ...]
+```
+
+Only systems whose declared area of use contains the point are returned,
+deprecated ones never are, and the order is smallest area first, because at any
+populated point both a world-wide system and a local one apply and the local
+one is nearly always what was meant. `kinds` selects the families — horizontal
+unless switched off, `vertical` and `threeDimensional` on request — and
+`authorities` narrows by authority.
 
 ### Refusing versus approximating
 

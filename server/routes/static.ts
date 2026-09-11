@@ -11,7 +11,6 @@ import { resolve } from 'node:path';
  */
 export function registerStaticRoutes(app: Hono, root: string): void {
   app.use('/dist/*', serveStatic({ root: '.', rewriteRequestPath: (p) => p }));
-  app.use('/src/*', serveStatic({ root: '.', rewriteRequestPath: (p) => p }));
   app.use('/examples/*', serveStatic({ root: '.', rewriteRequestPath: (p) => p }));
   app.use('/tests/*', serveStatic({ root: '.', rewriteRequestPath: (p) => p }));
 

@@ -12,15 +12,43 @@
  */
 
 import { MissingGridError, ProjWorkerError, DataVerificationError } from './errors.js';
+import type {
+  Coordinate, CrsInfo, CrsKinds, OperationInfo, Rpc, TransformOptions,
+} from './types.js';
+
+/** The public surface of a PROJ instance. */
+export interface Proj {
+  transform(
+    src: string, dst: string, x: number, y: number, z?: number,
+    opts?: TransformOptions,
+  ): Promise<Coordinate>;
+  transformMany(
+    src: string, dst: string, xyz: Float64Array, opts?: TransformOptions,
+  ): Promise<Float64Array>;
+  prepare(
+    src: string, dst: string, point?: { x?: number; y?: number },
+    opts?: { signal?: AbortSignal },
+  ): Promise<void>;
+  describe(
+    src: string, dst: string, point?: { x?: number; y?: number },
+    opts?: TransformOptions,
+  ): Promise<OperationInfo>;
+  listCrs(
+    lon: number, lat: number,
+    opts?: { kinds?: CrsKinds; authorities?: string[]; signal?: AbortSignal },
+  ): Promise<CrsInfo[]>;
+  dispose(): void;
+  readonly dataVersion: string;
+}
 
 export { MissingGridError, ProjWorkerError, DataVerificationError };
 
 /**
- * @param {{request: (message: object, options?: {signal?: AbortSignal, onProgress?: Function}) => Promise<any>, dispose: () => void}} rpc
- * @param {{version: string}} manifest
+   * @param) => Promise<any>, dispose: () => void}} rpc
+   * @param} manifest
  */
-export function createProjApi(rpc, manifest) {
-  function requirePair(src, dst) {
+export function createProjApi(rpc: Rpc, manifest: { version: string }): Proj {
+  function requirePair(src: string, dst: string): void {
     if (!src || !dst) throw new TypeError('src and dst are required');
   }
 
@@ -28,15 +56,17 @@ export function createProjApi(rpc, manifest) {
    * Transform one point. Coordinates are always lon,lat or easting,northing —
    * never the EPSG authority order — in both directions.
    *
-   * @param {string} src source CRS, e.g. 'EPSG:4326'
-   * @param {string} dst target CRS
-   * @param {number} x longitude or easting
-   * @param {number} y latitude or northing
-   * @param {number} [z] height
-   * @param {{allowBallpark?: boolean, signal?: AbortSignal}} [opts]
-   * @returns {Promise<{x: number, y: number, z: number}>}
+   * @param src source CRS, e.g. 'EPSG:4326'
+   * @param dst target CRS
+   * @param x longitude or easting
+   * @param y latitude or northing
+   * @param [z] height
+   * @param} [opts]
    */
-  async function transform(src, dst, x, y, z = 0, opts = {}) {
+  async function transform(
+    src: string, dst: string, x: number, y: number, z = 0,
+    opts: TransformOptions = {},
+  ): Promise<Coordinate> {
     requirePair(src, dst);
     const result = await rpc.request(
       {
@@ -58,13 +88,14 @@ export function createProjApi(rpc, manifest) {
    * rather than writing in place is what the transfer costs, and it is still
    * one message instead of one per point.
    *
-   * @param {string} src
-   * @param {string} dst
-   * @param {Float64Array} xyz interleaved x,y,z; length must be a multiple of 3
-   * @param {{allowBallpark?: boolean, signal?: AbortSignal}} [opts]
-   * @returns {Promise<Float64Array>}
+   * @param src
+   * @param dst
+   * @param xyz interleaved x,y,z; length must be a multiple of 3
+   * @param} [opts]
    */
-  async function transformMany(src, dst, xyz, opts = {}) {
+  async function transformMany(
+    src: string, dst: string, xyz: Float64Array, opts: TransformOptions = {},
+  ): Promise<Float64Array> {
     requirePair(src, dst);
     if (!(xyz instanceof Float64Array)) {
       throw new TypeError('transformMany: xyz must be a Float64Array');
@@ -91,12 +122,15 @@ export function createProjApi(rpc, manifest) {
    * Fetch and mount whatever transforming between these CRS at this point
    * would need, so the first real transform does not pay for it.
    *
-   * @param {string} src
-   * @param {string} dst
-   * @param {{x?: number, y?: number}} [point]
-   * @param {{signal?: AbortSignal}} [opts]
+   * @param src
+   * @param dst
+   * @param} [point]
+   * @param} [opts]
    */
-  async function prepare(src, dst, point = {}, opts = {}) {
+  async function prepare(
+    src: string, dst: string, point: { x?: number; y?: number } = {},
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<void> {
     requirePair(src, dst);
     await rpc.request(
       {
@@ -116,14 +150,15 @@ export function createProjApi(rpc, manifest) {
    * path so that transforming a million points does not carry it a million
    * times.
    *
-   * @param {string} src
-   * @param {string} dst
-   * @param {{x?: number, y?: number}} [point]
-   * @param {{allowBallpark?: boolean, signal?: AbortSignal}} [opts]
-   * @returns {Promise<{name: string, accuracy: number | null, ballpark: boolean,
-   *   grids: Array<{shortName: string, fullName: string, url: string, available: boolean}>}>}
+   * @param src
+   * @param dst
+   * @param} [point]
+   * @param} [opts]
    */
-  async function describe(src, dst, point = {}, opts = {}) {
+  async function describe(
+    src: string, dst: string, point: { x?: number; y?: number } = {},
+    opts: TransformOptions = {},
+  ): Promise<OperationInfo> {
     requirePair(src, dst);
     const result = await rpc.request(
       {
@@ -137,15 +172,47 @@ export function createProjApi(rpc, manifest) {
     return result.info;
   }
 
-  function dispose() {
+  /**
+   * The coordinate reference systems usable at a point, most local first.
+   *
+   * This is what lets an application ask a user to choose a system without
+   * shipping its own copy of the database or offering a list of ten thousand
+   * in which the right answer is unfindable. Only systems whose declared area
+   * of use contains the point are returned, and deprecated ones never are.
+   *
+   * `kinds` selects the families: horizontal (geographic 2D and projected) is
+   * on unless switched off, vertical and three-dimensional are off unless
+   * asked for. `authorities` narrows by authority, e.g. `['EPSG']`.
+   */
+  async function listCrs(
+    lon: number, lat: number,
+    opts: { kinds?: CrsKinds; authorities?: string[]; signal?: AbortSignal } = {},
+  ): Promise<CrsInfo[]> {
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+      throw new TypeError('listCrs: lon and lat are required');
+    }
+    const result = await rpc.request(
+      {
+        type: 'listCrs',
+        lon, lat,
+        kinds: opts.kinds,
+        authorities: opts.authorities ?? null,
+      },
+      { signal: opts.signal },
+    );
+    return result.crs;
+  }
+
+  function dispose(): void {
     rpc.dispose();
   }
 
-  const api = {
+  const api: Proj = {
     transform,
     transformMany,
     prepare,
     describe,
+    listCrs,
     dispose,
     dataVersion: manifest.version,
   };

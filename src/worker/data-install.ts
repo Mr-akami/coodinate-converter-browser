@@ -10,18 +10,22 @@
  * Everything runs inside one Web Lock so two tabs cannot install at once.
  */
 
-import { selectNewestCompleteVersion } from './data-version.js';
+import { selectNewestCompleteVersion, type Generation } from './data-version.js';
+import type {
+  DataStore, FetchImpl, Lock, Manifest, ProgressEvent,
+} from '../types.js';
 import { responseChunks, writeVerifiedFile } from './verified-write.js';
 
 const INSTALL_LOCK = 'proj-data-install';
 const MANIFEST_FILE = 'manifest.json';
 const PROJ_DB_FILE = 'proj.db';
 
-const manifestPath = (version) => `${version}/${MANIFEST_FILE}`;
-const projDbPath = (version) => `${version}/${PROJ_DB_FILE}`;
+const manifestPath = (version: string) => `${version}/${MANIFEST_FILE}`;
+const projDbPath = (version: string) => `${version}/${PROJ_DB_FILE}`;
 
-function assertManifestShape(manifest) {
-  if (!manifest || !manifest.version || !manifest.projDb || !manifest.grids) {
+function assertManifestShape(manifest: unknown): asserts manifest is Manifest {
+  const shape = manifest as Partial<Manifest> | null;
+  if (!shape || !shape.version || !shape.projDb || !shape.grids) {
     throw new Error('manifest is missing version, projDb or grids');
   }
 }
@@ -30,7 +34,8 @@ function assertManifestShape(manifest) {
  * Classifies the Manifest request once: either we have a Manifest, or we have
  * the reason we do not.
  */
-async function requestManifest(fetchImpl, manifestUrl) {
+async function requestManifest(fetchImpl: FetchImpl, manifestUrl: string):
+    Promise<{ manifest: Manifest | null; unavailable?: unknown }> {
   try {
     const response = await fetchImpl(manifestUrl, { cache: 'no-cache', redirect: 'follow' });
     if (!response.ok) throw new Error(`manifest fetch failed: ${response.status}`);
@@ -42,8 +47,8 @@ async function requestManifest(fetchImpl, manifestUrl) {
   }
 }
 
-async function collectGenerations(store) {
-  const generations = [];
+async function collectGenerations(store: DataStore): Promise<Generation[]> {
+  const generations: Generation[] = [];
   for (const version of await store.list('')) {
     const manifestPublished = await store.isPublished(manifestPath(version));
     const projDbPublished = await store.isPublished(projDbPath(version));
@@ -60,7 +65,8 @@ async function collectGenerations(store) {
   return generations;
 }
 
-async function startFromLocalVersion(store, unavailable) {
+async function startFromLocalVersion(store: DataStore, unavailable: unknown):
+    Promise<{ dataVersion: string; manifest: Manifest }> {
   const version = selectNewestCompleteVersion(await collectGenerations(store));
   if (!version) {
     throw new Error('proj-data manifest is unavailable and no complete local Data Version exists', {
@@ -71,7 +77,7 @@ async function startFromLocalVersion(store, unavailable) {
   return { dataVersion: version, manifest };
 }
 
-async function ensureManifestFile(store, manifest) {
+async function ensureManifestFile(store: DataStore, manifest: Manifest) {
   const path = manifestPath(manifest.version);
   if (await store.isPublished(path)) return;
   await writeVerifiedFile({
@@ -82,7 +88,10 @@ async function ensureManifestFile(store, manifest) {
   });
 }
 
-async function ensureProjDb(store, manifest, fetchImpl, projDbUrlPattern, onProgress) {
+async function ensureProjDb(
+  store: DataStore, manifest: Manifest, fetchImpl: FetchImpl,
+  projDbUrlPattern: string, onProgress?: (event: ProgressEvent) => void,
+) {
   const path = projDbPath(manifest.version);
   if (await store.isPublished(path)) return;
 
@@ -104,26 +113,22 @@ async function ensureProjDb(store, manifest, fetchImpl, projDbUrlPattern, onProg
   });
 }
 
-async function removeOtherVersions(store, version) {
+async function removeOtherVersions(store: DataStore, version: string) {
   for (const entry of await store.list('')) {
     if (entry !== version) await store.remove(entry);
   }
 }
 
-/**
- * @param {{
- *   store: object,
- *   lock: {request: (name: string, callback: () => Promise<any>) => Promise<any>},
- *   fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
- *   manifestUrl: string,
- *   projDbUrlPattern: string,
- *   onProgress?: (event: {stage: string, bytes: number, total: number}) => void,
- * }} params
- * @returns {Promise<{dataVersion: string, manifest: object}>}
- */
 export function installProjData({
   store, lock, fetchImpl, manifestUrl, projDbUrlPattern, onProgress,
-}) {
+}: {
+  store: DataStore;
+  lock: Lock;
+  fetchImpl: FetchImpl;
+  manifestUrl: string;
+  projDbUrlPattern: string;
+  onProgress?: (event: ProgressEvent) => void;
+}): Promise<{ dataVersion: string; manifest: Manifest }> {
   return lock.request(INSTALL_LOCK, async () => {
     const { manifest, unavailable } = await requestManifest(fetchImpl, manifestUrl);
     if (!manifest) return startFromLocalVersion(store, unavailable);

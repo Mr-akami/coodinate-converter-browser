@@ -22,11 +22,11 @@ const INITIAL_STATE = new Uint32Array([
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ]);
 
-function rotr(value, bits) {
+function rotr(value: number, bits: number): number {
   return (value >>> bits) | (value << (32 - bits));
 }
 
-function compress(state, schedule, block) {
+function compress(state: Uint32Array, schedule: Uint32Array, block: Uint8Array): void {
   for (let i = 0; i < 16; i += 1) {
     const offset = i * 4;
     schedule[i] = ((block[offset] << 24) | (block[offset + 1] << 16)
@@ -78,8 +78,7 @@ export function createSha256() {
   let totalBytes = 0;
 
   return {
-    /** @param {Uint8Array} chunk */
-    update(chunk) {
+    update(chunk: Uint8Array): void {
       totalBytes += chunk.length;
       let offset = 0;
 

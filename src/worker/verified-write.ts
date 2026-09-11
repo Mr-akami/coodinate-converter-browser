@@ -10,20 +10,20 @@
  */
 
 import { DataVerificationError } from '../errors.js';
+import type { DataStore, ManifestGrid } from '../types.js';
 import { createSha256 } from './sha256.js';
 
 /**
- * @param {{
- *   store: object,
- *   path: string,
- *   source: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
- *   expected: {size: number, sha256: string} | null,
- *   onBytes?: (received: number) => void,
- * }} params
- *   `expected` is null for the Manifest itself, whose validation is that it
- *   parsed as JSON before this call.
+ * `expected` is null for the Manifest itself, whose validation is that it
+ * parsed as JSON before this call.
  */
-export async function writeVerifiedFile({ store, path, source, expected, onBytes }) {
+export async function writeVerifiedFile({ store, path, source, expected, onBytes }: {
+  store: DataStore;
+  path: string;
+  source: AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
+  expected: ManifestGrid | null;
+  onBytes?: (received: number) => void;
+}): Promise<void> {
   await store.remove(`${path}.ok`);
 
   const writable = await store.writeStream(path);
@@ -54,12 +54,8 @@ export async function writeVerifiedFile({ store, path, source, expected, onBytes
   await store.publish(path);
 }
 
-/**
- * @param {Response} response
- * @returns {AsyncIterable<Uint8Array>}
- */
-export async function* responseChunks(response) {
-  const reader = response.body.getReader();
+export async function* responseChunks(response: Response): AsyncIterable<Uint8Array> {
+  const reader = response.body!.getReader();
   for (;;) {
     const { value, done } = await reader.read();
     if (done) return;
