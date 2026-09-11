@@ -120,6 +120,15 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
     return extra;
   }
 
+  /*
+   * Why a strict transform cannot be answered.
+   *
+   * "A grid is missing" and "a grid is missing and you cannot get it" are
+   * different problems with different fixes — retry the fetch, or add the file
+   * to the Data Origin — so the error says which. Node, reading a local
+   * directory, has no Manifest and therefore nothing it could obtain, so
+   * anything missing there is permanent by definition.
+   */
   function verifyStrictOperation(src, dst, x, y) {
     const pairKey = `${src}|${dst}`;
     if (strictCheckedOk.has(pairKey)) return;
@@ -131,19 +140,28 @@ export function createTransformFlow({ projModule, gridProvider, manifest }) {
 
     const missing = projModule
       .gridsNeeded(src, dst, x, y, 0)
-      .filter((grid) => !grid.available && grid.fullName);
+      .filter((grid) => !grid.available && grid.fullName)
+      .map((grid) => ({
+        shortName: grid.shortName,
+        fullName: grid.fullName,
+        url: grid.url,
+        obtainable: Boolean(manifest.grids[grid.fullName]),
+      }));
+
+    if (missing.length === 0) {
+      throw new MissingGridError(
+        `no accurate operation exists from ${src} to ${dst}`,
+        { reason: 'ballpark_only', missingGrids: [] },
+      );
+    }
+
+    const names = missing.map((grid) => grid.fullName).join(', ');
+    const anyObtainable = missing.some((grid) => grid.obtainable);
     throw new MissingGridError(
-      missing.length
-        ? `missing grid(s): ${missing.map((grid) => grid.fullName).join(', ')}`
-        : 'no non-ballpark operation available (ballpark only)',
-      {
-        reason: missing.length ? 'missing_grid' : 'ballpark_only',
-        missingGrids: missing.map((grid) => ({
-          shortName: grid.shortName,
-          fullName: grid.fullName,
-          url: grid.url,
-        })),
-      },
+      anyObtainable
+        ? `missing grid(s): ${names}`
+        : `missing grid(s) the data origin does not carry: ${names}`,
+      { reason: 'missing_grid', missingGrids: missing },
     );
   }
 

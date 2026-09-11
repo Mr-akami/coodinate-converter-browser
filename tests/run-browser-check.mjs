@@ -3,7 +3,20 @@ import { once } from 'node:events';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
+
+/*
+ * One engine per run, so a failure names the engine that failed. The library
+ * targets all three; which ones a given machine can actually launch depends on
+ * the system libraries Playwright needs.
+ */
+const ENGINES = { chromium, firefox, webkit };
+const ENGINE_NAME = process.env.BROWSER || 'chromium';
+const engine = ENGINES[ENGINE_NAME];
+if (!engine) {
+  console.error(`unknown BROWSER: ${ENGINE_NAME} (expected chromium, firefox or webkit)`);
+  process.exit(2);
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -41,10 +54,12 @@ async function run() {
   try {
     await waitForServerReady();
 
-    const userDataDir = resolve(repoRoot, '.playwright');
-    const context = await chromium.launchPersistentContext(userDataDir, {
+    // A persistent profile is what gives OPFS somewhere to live across the
+    // page's own reloads; the directory is per engine so runs cannot collide.
+    const userDataDir = resolve(repoRoot, `.playwright/${ENGINE_NAME}`);
+    const context = await engine.launchPersistentContext(userDataDir, {
       headless: true,
-      args: ['--no-sandbox'],
+      ...(ENGINE_NAME === 'chromium' ? { args: ['--no-sandbox'] } : {}),
     });
 
     const page = await context.newPage();
@@ -58,7 +73,7 @@ async function run() {
     }, null, { timeout: 240000 });
 
     const statusText = (await page.textContent('#status') || '').trim();
-    console.log(`Summary: ${statusText}`);
+    console.log(`Summary [${ENGINE_NAME}]: ${statusText}`);
 
     const match = statusText.match(/Done\.\s+(\d+)\/(\d+)\s+passed/);
     if (!match) {

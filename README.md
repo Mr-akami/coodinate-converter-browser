@@ -86,7 +86,15 @@ decide per CRS pair.
 ## Browser support
 
 Chrome, Firefox and Safari. The library needs the Origin Private File System
-with synchronous access handles, WebAssembly exception handling, and Web Locks.
+with synchronous access handles, WebAssembly exception handling, and Web Locks,
+all of which those three have had for some years.
+
+The end-to-end suite runs on Chromium and Firefox here and passes identically
+on both. WebKit is not exercised in this repository's environment, which lacks
+a system library Playwright's WebKit build needs; nothing in the code is
+Chromium-specific, and `FileSystemFileHandle.move()` in particular is avoided
+because only Chrome has it, but Safari support is reasoned rather than
+measured.
 
 Grids are mounted from OPFS rather than read into memory, so resident memory
 does not grow with the size of the grids you use.
@@ -107,7 +115,9 @@ npm run dev                       # dev server on :3000, serving the demo
 ```bash
 npm run test:native               # C++ wrapper under AddressSanitizer
 npm run test:unit                 # TypeScript units
-npm run test:browser              # end-to-end against reference values
+npm run test:browser              # end-to-end, Chromium by default
+BROWSER=firefox npm run test:browser
+npm run test:browser:all          # every engine the machine can launch
 npm run typecheck
 ```
 
