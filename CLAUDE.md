@@ -51,12 +51,12 @@ is delegated to `proj_create_crs_to_crs_from_pj`, the same entry point `cs2cs`
 uses; hand-rolled selection disagreed with `cs2cs` in both directions on real
 data, and the commit history explains each case.
 
-**`src/proj-worker.js`** is the only owner of OPFS, MEMFS and the PROJ context.
+**`src/proj-worker.ts`** is the only owner of OPFS, MEMFS and the PROJ context.
 The main thread never holds grid bytes. **`src/worker/`** holds the pieces it
 composes: installing a Data Version, providing grids, the transform flow.
 
-**`src/proj-api.js`** is the public surface, reached through
-`src/proj-runtime.js` in a browser and `src/node.js` on Node. Both build on the
+**`src/proj-api.ts`** is the public surface, reached through
+`src/proj-runtime.ts` in a browser and `src/node.ts` on Node. Both build on the
 same worker protocol and the same transform flow.
 
 **Grids are mounted, not loaded.** WORKERFS in the browser, NODEFS on Node.
@@ -83,7 +83,7 @@ directory keeps its CMake cache and the new flags never reach PROJ.
 ## Key files
 
 - `src/proj_wasm.cpp`, `src/proj_wasm.h` — the wasm module's C ABI
-- `src/worker/transform-flow.js` — grid fetching, strict checking, ordering
+- `src/worker/transform-flow.ts` — grid fetching, strict checking, ordering
 - `scripts/build-proj-wasm.sh` — wasm build
 - `scripts/build-proj-native.sh` — host build for the native tests
 - `scripts/build-data-dist.mjs` — generates a Data Origin

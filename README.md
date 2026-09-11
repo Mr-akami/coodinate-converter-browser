@@ -106,6 +106,32 @@ know the error is tolerable, and a bad one by default, because nothing in the
 returned coordinate tells you it happened. Ask `describe()` first if you want to
 decide per CRS pair.
 
+## Node
+
+```js
+import { createProjNode } from '@mr-akami/proj-wasm-proj-data/node';
+
+const proj = await createProjNode();          // reads PROJ_DATA, else PROJ_LIB
+const proj = await createProjNode({ dataDir: '/srv/proj-data' });
+```
+
+The same wasm module, the same `proj.db`, the same grids, so a server and a
+browser return the same numbers. Nothing is downloaded: the directory is
+mounted and PROJ reads it in place. It runs in a worker thread so a server's
+event loop is not blocked; pass `inProcess: true` for scripts.
+
+Use `transformMany` for bulk work. Measured on 200,000 points between
+EPSG:4326 and EPSG:6677 on one machine:
+
+| Path | Time |
+| --- | --- |
+| `transformMany`, one call | 40 ms |
+| `cs2cs` 9.7.1, same points piped through one process | 224 ms |
+| `transform`, one call per point | about 7.6 s |
+
+The per-point cost inside the module is a fraction of a microsecond; what a
+caller pays for is the message round trip, so make few of them.
+
 ## Browser support
 
 Chrome, Firefox and Safari. The library needs the Origin Private File System
