@@ -113,7 +113,11 @@ import { createProjNode } from '@mr-akami/proj-wasm-proj-data/node';
 
 const proj = await createProjNode();          // reads PROJ_DATA, else PROJ_LIB
 const proj = await createProjNode({ dataDir: '/srv/proj-data' });
+const proj = await createProjNode({ dataDir: './data-dist' }); // a Data Origin works too
 ```
+
+`dataDir` is a flat proj-data directory, a Data Origin from
+`build-data-dist.mjs`, or one of its `v/<version>/` directories.
 
 The same wasm module, the same `proj.db`, the same grids, so a server and a
 browser return the same numbers. Nothing is downloaded: the directory is

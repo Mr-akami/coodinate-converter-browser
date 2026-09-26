@@ -13,7 +13,7 @@
  * directory is mounted with NODEFS and PROJ reads it directly.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -36,6 +36,19 @@ const NODE_WORKER_PATH = ['.', 'node-worker.js'].join('/');
 
 let warnedAboutProjLib = false;
 
+/*
+ * A Data Origin root (data-dist/) holds no proj.db itself; its manifest.json
+ * names the Data Version directory that does.
+ */
+function projDbDir(dir: string): string {
+  if (existsSync(resolve(dir, 'proj.db'))) return dir;
+  try {
+    const { version } = JSON.parse(readFileSync(resolve(dir, 'manifest.json'), 'utf8'));
+    if (typeof version === 'string') return resolve(dir, 'v', version);
+  } catch {}
+  return dir;
+}
+
 /**
  * Where proj-data lives: what the caller said, else PROJ_DATA, else PROJ_LIB.
  * PROJ deprecated PROJ_LIB in favour of PROJ_DATA, but a great many machines
@@ -55,7 +68,7 @@ export function resolveDataDir(
   const tried: string[] = [];
   for (const { value, from } of candidates) {
     if (!value) continue;
-    const dir = isAbsolute(value) ? value : resolve(process.cwd(), value);
+    const dir = projDbDir(isAbsolute(value) ? value : resolve(process.cwd(), value));
     if (existsSync(resolve(dir, 'proj.db'))) {
       if (from === 'PROJ_LIB' && !warnedAboutProjLib) {
         warnedAboutProjLib = true;

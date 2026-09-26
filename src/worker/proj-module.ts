@@ -39,10 +39,10 @@ export async function createProjModule({
     locateFile: (path: string) => (wasmUrl && path.endsWith('.wasm') ? wasmUrl : path),
   });
 
-  ensureMemfsDir(Module.FS, memfsPath);
   if (nodeDataDir) {
-    Module.FS.mount(Module.NODEFS, { root: nodeDataDir }, memfsPath);
+    mountNodeDataDir(Module.FS, Module.NODEFS, nodeDataDir, memfsPath);
   } else {
+    ensureMemfsDir(Module.FS, memfsPath);
     Module.FS.writeFile(`${memfsPath}/proj.db`, projDbBytes!);
   }
 
@@ -221,4 +221,38 @@ export async function createProjModule({
       if (status !== 0) throw new Error(`pw_refresh_after_grid_write failed: ${status}`);
     },
   };
+}
+
+/*
+ * A flat proj-data directory is mounted as it is. A Data Version directory
+ * from build-data-dist.mjs keeps its grids under grids/, where PROJ's single
+ * search path would not find them, so it is mounted elsewhere and MEMFS gets a
+ * flat view of symlinks, the same shape the browser builds. Nothing is copied.
+ */
+const NODE_ORIGIN_MOUNT = '/proj-origin';
+
+function mountNodeDataDir(FS: any, NODEFS: any, dataDir: string, memfsPath: string) {
+  FS.mkdirTree(NODE_ORIGIN_MOUNT);
+  FS.mount(NODEFS, { root: dataDir }, NODE_ORIGIN_MOUNT);
+  const gridsDir = `${NODE_ORIGIN_MOUNT}/grids`;
+  if (!isDir(FS, gridsDir)) {
+    FS.unmount(NODE_ORIGIN_MOUNT);
+    ensureMemfsDir(FS, memfsPath);
+    FS.mount(NODEFS, { root: dataDir }, memfsPath);
+    return;
+  }
+  ensureMemfsDir(FS, memfsPath);
+  FS.symlink(`${NODE_ORIGIN_MOUNT}/proj.db`, `${memfsPath}/proj.db`);
+  for (const name of FS.readdir(gridsDir) as string[]) {
+    if (name === '.' || name === '..') continue;
+    FS.symlink(`${gridsDir}/${name}`, `${memfsPath}/${name}`);
+  }
+}
+
+function isDir(FS: any, path: string): boolean {
+  try {
+    return FS.isDir(FS.stat(path).mode);
+  } catch {
+    return false;
+  }
 }

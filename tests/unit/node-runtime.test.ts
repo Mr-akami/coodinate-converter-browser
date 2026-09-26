@@ -22,6 +22,7 @@ const DATA_DIR = resolve(import.meta.dirname, '../../third_party/sc-proj-data/pr
 const BUILT = resolve(import.meta.dirname, '../../dist/lib/node.js');
 const WASM = resolve(import.meta.dirname, '../../dist/proj_wasm.js');
 
+const DATA_ORIGIN = resolve(import.meta.dirname, '../../data-dist');
 const ready = existsSync(resolve(DATA_DIR, 'proj.db')) && existsSync(WASM) && existsSync(BUILT);
 const withData = ready ? describe : describe.skip;
 
@@ -187,6 +188,27 @@ withData('createProjNode', () => {
       expect(approximate.x).toBeCloseTo(139.7638660290314, 9);
     } finally {
       proj.dispose();
+    }
+  }, 120_000);
+
+  const withOrigin = existsSync(resolve(DATA_ORIGIN, 'manifest.json')) ? it : it.skip;
+
+  withOrigin('reads a Data Origin, grids under grids/, as it reads proj-data', async () => {
+    /*
+     * A geoid-backed height is the case that needs a grid, so it is the case
+     * that shows grids/ is searched: without it the answer is ballpark only.
+     */
+    const src = 'EPSG:6677+6695';
+    const flat = await createProjNode({ dataDir: DATA_DIR, inProcess: true });
+    const origin = await createProjNode({ dataDir: DATA_ORIGIN, inProcess: true });
+    try {
+      expect(origin.dataVersion).toBe(flat.dataVersion);
+      const a = await flat.transform(src, 'EPSG:4978', -5995, -35370, 3);
+      const b = await origin.transform(src, 'EPSG:4978', -5995, -35370, 3);
+      expect(b).toEqual(a);
+    } finally {
+      flat.dispose();
+      origin.dispose();
     }
   }, 120_000);
 });
