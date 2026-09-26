@@ -1,4 +1,13 @@
-import { initProjRuntime } from '../src/proj-runtime.js';
+import { createProj } from '/dist/lib/index.js';
+
+/*
+ * The reference values come from cs2cs, which falls back to a ballpark
+ * operation when an accurate one is unavailable. The library refuses that by
+ * default, so the suite has to ask for cs2cs behaviour explicitly; otherwise
+ * it would be comparing two different policies and calling the difference a
+ * failure.
+ */
+const BALLPARK = { allowBallpark: true };
 
 // --- Tolerances ---
 const TOL = {
@@ -46,7 +55,7 @@ async function runCsvComparison(proj) {
     const tolXY = isGeographic(row.dst_crs) ? TOL.geo : TOL.proj;
 
     try {
-      const r = await proj.transform(row.src_crs, row.dst_crs, inX, inY, inZ);
+      const r = await proj.transform(row.src_crs, row.dst_crs, inX, inY, inZ, BALLPARK);
       const dx = r.x - ex;
       const dy = r.y - ey;
       const dz = r.z - ez;
@@ -271,8 +280,8 @@ async function runRoundTrips(proj) {
 
   for (const c of ROUNDTRIP_CASES) {
     try {
-      const fwd = await proj.transform(c.a, c.b, c.x, c.y, c.z);
-      const inv = await proj.transform(c.b, c.a, fwd.x, fwd.y, fwd.z);
+      const fwd = await proj.transform(c.a, c.b, c.x, c.y, c.z, BALLPARK);
+      const inv = await proj.transform(c.b, c.a, fwd.x, fwd.y, fwd.z, BALLPARK);
       const dx = inv.x - c.x;
       const dy = inv.y - c.y;
       const dz = inv.z - c.z;
@@ -358,7 +367,7 @@ async function runAxisTests(proj) {
   const results = [];
   for (const c of AXIS_CASES) {
     try {
-      const r = await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0);
+      const r = await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0, BALLPARK);
       const isNanInf = !isFinite(r.x) || !isFinite(r.y);
 
       // For swapped input: should either fail, return NaN, or give clearly wrong result
@@ -519,7 +528,7 @@ async function runRobustnessTests(proj) {
       const n = c.repeat || 1;
       let r;
       for (let i = 0; i < n; i++) {
-        r = await proj.transform(c.src, c.dst, c.x, c.y, c.z);
+        r = await proj.transform(c.src, c.dst, c.x, c.y, c.z, BALLPARK);
       }
       const isNanInf = !isFinite(r.x) || !isFinite(r.y) || !isFinite(r.z);
       const wasmStatus = isNanInf ? 'NaN/Inf' : 'returned';
@@ -593,7 +602,7 @@ async function runPerfTests(proj) {
   for (const c of PERF_CASES) {
     try {
       // Warm-up; abort the case if the strict transform refuses (missing grid etc).
-      await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0);
+      await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0, BALLPARK);
     } catch (e) {
       results.push({ label: c.label, avgMs: NaN, opsSec: NaN, skipped: e.message });
       continue;
@@ -601,7 +610,7 @@ async function runPerfTests(proj) {
 
     const start = performance.now();
     for (let i = 0; i < PERF_ITERATIONS; i++) {
-      await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0);
+      await proj.transform(c.src, c.dst, c.x, c.y, c.z || 0, BALLPARK);
     }
     const elapsed = performance.now() - start;
 
@@ -700,12 +709,11 @@ export async function run() {
 
   let proj;
   try {
-    const { api } = await initProjRuntime({
-      apiBaseUrl: '/api/proj-data',
+    proj = await createProj({
+      dataBaseUrl: '/api/proj-data',
       dataDirName: 'proj-data',
       wasmUrl: '/dist/proj_wasm.wasm',
     });
-    proj = api;
   } catch (e) {
     statusEl.textContent = `Init failed: ${e.message}`;
     return;

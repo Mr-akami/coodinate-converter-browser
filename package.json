@@ -1,12 +1,18 @@
 {
-  "name": "coodinate-converter-browser",
-  "private": true,
+  "name": "@mr-akami/proj-wasm-proj-data",
   "type": "module",
   "scripts": {
-    "build:manifest": "node scripts/build-manifest.mjs",
     "dev": "tsx watch server/index.ts",
     "start": "tsx server/index.ts",
-    "test:browser": "node tests/run-browser-check.mjs"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:lib": "vite build && tsc -p tsconfig.json",
+    "test:unit": "vitest run",
+    "test:native": "bash scripts/build-proj-native.sh && ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 build/native-tests/proj_wasm_tests",
+    "test:browser": "node tests/run-browser-check.mjs",
+    "build:data": "node scripts/build-data-dist.mjs",
+    "prepack": "npm run build:lib && npm run test:unit",
+    "test:browser:all": "for b in chromium firefox webkit; do BROWSER=$b node tests/run-browser-check.mjs || exit 1; done",
+    "build:types": "tsc -p tsconfig.types.json"
   },
   "packageManager": "pnpm@9.15.0",
   "dependencies": {
@@ -14,7 +20,40 @@
     "hono": "^4.6.14"
   },
   "devDependencies": {
+    "@types/node": "^26.5.0",
     "playwright": "^1.41.2",
-    "tsx": "^4.19.2"
-  }
+    "tsx": "^4.19.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-dts": "^5.1.0",
+    "vitest": "^5.0.0"
+  },
+  "version": "0.1.0",
+  "description": "PROJ coordinate transformation in the browser and on Node, as WebAssembly, fetching only the grids a transformation needs",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./types/src/proj-runtime.d.ts",
+      "default": "./dist/lib/index.js"
+    },
+    "./node": {
+      "types": "./types/src/node.d.ts",
+      "default": "./dist/lib/node.js"
+    },
+    "./testing": {
+      "types": "./types/src/testing.d.ts",
+      "default": "./dist/lib/testing.js"
+    },
+    "./wasm": "./dist/proj_wasm.wasm"
+  },
+  "files": [
+    "dist/lib/",
+    "types/",
+    "dist/proj_wasm.js",
+    "dist/proj_wasm.wasm",
+    "scripts/build-data-dist.mjs",
+    "README.md"
+  ],
+  "types": "./types/src/proj-runtime.d.ts"
 }

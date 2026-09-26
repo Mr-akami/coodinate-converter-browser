@@ -1,58 +1,91 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
 
-## Project
+## What this is
 
-Browser-based coordinate transformation using PROJ compiled to WebAssembly. proj-data stored in OPFS (Origin Private File System) for offline use after initial load. Chrome-targeted PoC.
+`@mr-akami/proj-wasm-proj-data`: PROJ compiled to WebAssembly, for coordinate
+transformation in the browser and on Node. It ships code, not data. The host
+application serves `proj.db` and the grids as static files; there is no server
+component in production.
 
-## Dev Environment
+Read `docs/refactor-plan.md` for the design and the reasoning behind it,
+`CONTEXT.md` for the vocabulary, and `docs/adr/` for the three decisions that
+are hard to reverse.
 
-Requires Nix:
+## Development
+
+Requires Nix. `emcc` and `cmake` exist only inside the shell.
+
 ```bash
-nix develop          # enter dev shell (emscripten, cmake, ninja, nodejs, etc.)
-```
-
-PROJ is a git submodule:
-```bash
+nix develop
 git submodule update --init --recursive
+
+./scripts/build-proj-wasm.sh      # wasm module; FORCE_REBUILD=1 for a clean one
+npm run build:data                # Data Origin from third_party/sc-proj-data
+npm run dev                       # dev server on :3000
 ```
 
-## Build
+A full rebuild takes several minutes and `-flto` uses a lot of memory at link
+time; cap parallelism with `MAKEFLAGS=-j4 CMAKE_BUILD_PARALLEL_LEVEL=4` on a
+machine under load. Run it in the background and poll rather than blocking.
+
+## Tests
 
 ```bash
-# full build (sqlite3 + zlib + libtiff + PROJ + wasm bundle)
-./scripts/build-proj-wasm.sh
-
-# skip optional deps
-WITH_TIFF=0 WITH_ZLIB=0 ./scripts/build-proj-wasm.sh
-
-# force rebuild everything
-FORCE_REBUILD=1 ./scripts/build-proj-wasm.sh
+npm run test:native    # C++ wrapper, AddressSanitizer and UndefinedBehaviorSanitizer
+npm run test:unit      # vitest, including the Node runtime
+npm run test:browser    # end-to-end against tests/reference.csv
+npm run typecheck
 ```
 
-Output: `dist/proj_wasm.js` + `dist/proj_wasm.wasm` (ES6 module, MODULARIZE=1)
+The native tests link the PROJ submodule directly and run in seconds, so they
+are the right place to pin wrapper behaviour. The browser suite is slow and
+needs a built wasm module and a built Data Origin.
 
 ## Architecture
 
-**Build chain:** Emscripten cross-compiles SQLite3, zlib, libtiff, then PROJ as static libs. `src/proj_wasm.c` wraps PROJ's C API into 4 exported functions, linked into final wasm bundle by `emcc`.
+**`src/proj_wasm.cpp`** wraps PROJ's C API in C++17 with RAII. It does not use
+`osgeo::proj`, whose API and ABI PROJ does not guarantee. Operation selection
+is delegated to `proj_create_crs_to_crs_from_pj`, the same entry point `cs2cs`
+uses; hand-rolled selection disagreed with `cs2cs` in both directions on real
+data, and the commit history explains each case.
 
-**WASM API** (`src/proj_wasm.c`):
-- `proj_init(data_dir)` — init context, set search paths + DB
-- `proj_transform(src, dst, x, y, z)` — coordinate transform between CRS IDs
-- `proj_clear_cache()` — flush cached projection operation
-- `proj_cleanup()` — destroy context
+**`src/proj-worker.ts`** is the only owner of OPFS, MEMFS and the PROJ context.
+The main thread never holds grid bytes. **`src/worker/`** holds the pieces it
+composes: installing a Data Version, providing grids, the transform flow.
 
-Caches last-used projection (src/dst pair) to avoid recreation on repeated transforms.
+**`src/proj-api.ts`** is the public surface, reached through
+`src/proj-runtime.ts` in a browser and `src/node.ts` on Node. Both build on the
+same worker protocol and the same transform flow.
 
-**Data flow:** Hono server serves `proj.db` + manifest at `/api/proj-data/manifest`, individual grids at `/api/proj-data/v/<version>/grids/<name>`. Frontend downloads manifest + proj.db only at startup (~10MB), caches in OPFS. On each transform, `pw_grids_needed` enumerates required grids; missing ones are fetched lazily, sha256-verified, mounted into MEMFS, then `pw_refresh_after_grid_write` recreates the PROJ context to invalidate availability caches. `pw_transform` is **strict**: it refuses to silently fall back to a less-accurate Helmert/ballpark op when a grid is missing — instead it throws `MissingGridError` so the caller can decide.
+**Grids are mounted, not loaded.** WORKERFS in the browser, NODEFS on Node.
+Nothing copies a grid into wasm memory.
 
-**Hono server:** `npm run build:manifest` (build-time) generates `server/manifest.json` from `third_party/sc-proj-data/proj/`. Allow-list = (`grid_alternatives.{proj_grid_name, original_grid_name, old_proj_grid_name}` ∪ `grid_transformation.grid_name` ∪ `other_transformation.grid_name`) ∩ on-disk files. `npm run dev:server` runs the server on port 3000.
+## Things that will bite you
 
-## Key Files
+**The PROJ pin is not free to move.** `third_party/proj` is pinned to the tag
+that generated the `proj.db` in use. Upstream raised the database layout from 6
+to 7 in April 2026 and every build after that refuses our layout-6 database;
+moving to it took the end-to-end suite from 335 passes to 5.
 
-- `src/proj_wasm.c` — C wrapper exposing PROJ to JS
-- `scripts/build-proj-wasm.sh` — full build orchestration (~240 lines)
-- `agent.md` — project goals/architecture (Japanese)
-- `docs/proj-wasm-build.md` — build details and API notes
-- `third_party/proj/` — PROJ submodule
+**`transform` refuses by default.** A missing grid is an error, not a quietly
+approximate answer. Tests that compare against `cs2cs` output must pass
+`allowBallpark: true`, because `cs2cs` approximates.
+
+**Reference values come from `cs2cs` built from the submodule.** The `cs2cs` on
+`PATH` is a different version. `scripts/build-proj-native.sh` builds the right
+one.
+
+**`FORCE_REBUILD=1` matters after a flag change.** Without it the PROJ build
+directory keeps its CMake cache and the new flags never reach PROJ.
+
+## Key files
+
+- `src/proj_wasm.cpp`, `src/proj_wasm.h` — the wasm module's C ABI
+- `src/worker/transform-flow.ts` — grid fetching, strict checking, ordering
+- `scripts/build-proj-wasm.sh` — wasm build
+- `scripts/build-proj-native.sh` — host build for the native tests
+- `scripts/build-data-dist.mjs` — generates a Data Origin
+- `docs/refactor-plan.md` — design and rationale
+- `docs/adr/` — static hosting, WORKERFS, refusing rather than approximating

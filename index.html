@@ -156,7 +156,8 @@
     <pre id="result"></pre>
 
     <script type="module">
-      import { initProjRuntime } from './src/proj-runtime.js';
+      import { createProj } from '/dist/lib/index.js';
+      import { preloadGrids } from '/dist/lib/testing.js';
 
       const btn = document.getElementById('btn');
       const statusEl = document.getElementById('status');
@@ -237,8 +238,8 @@
       // Apply default preset on load
       presetEl.dispatchEvent(new Event('change'));
 
-      initProjRuntime({
-        apiBaseUrl: '/api/proj-data',
+      createProj({
+        dataBaseUrl: '/api/proj-data',
         dataDirName: 'proj-data',
         wasmUrl: '/dist/proj_wasm.wasm',
         onProgress: (p) => {
@@ -247,13 +248,11 @@
             statusEl.textContent = `Downloading proj.db: ${pct}%`;
           }
         },
-      }).then(async ({ api, manifest }) => {
+      }).then(async (api) => {
         proj = api;
         btn.disabled = false;
         preloadBtn.disabled = false;
-        const totalGrids = Object.keys(manifest.grids).length;
-        const totalSizeMB = Object.values(manifest.grids).reduce((s, g) => s + g.size, 0) / 1024 / 1024;
-        await refreshPreloadStatus(`manifest: ${totalGrids} grids (${totalSizeMB.toFixed(0)} MB total). version=${manifest.version}`);
+        await refreshPreloadStatus(`data version ${api.dataVersion}`);
         statusEl.textContent = 'Ready';
         await runChecks();
       }).catch((err) => {
@@ -263,7 +262,7 @@
 
       async function tryTransform(src, dst, x, y, z) {
         try {
-          const r = await proj.transform(src, dst, x, y, z);
+          const r = await proj.transform(src, dst, x, y, z, { allowBallpark: true });
           if (isNaN(r.x) || r.x === Infinity) return { ok: false, reason: 'NaN' };
           return { ok: true, ...r };
         } catch (e) {
@@ -339,7 +338,7 @@
         try {
           if (mode === 'all') {
             preloadStatusEl.textContent = 'Pre-fetching ALL grids... this may take a while.';
-            const result = await proj.preloadGrids('all', {
+            const result = await preloadGrids(proj, 'all', {
               onProgress: ({ done, total }) => {
                 preloadStatusEl.textContent = `Pre-fetching... ${done}/${total} grids`;
               },
@@ -351,7 +350,7 @@
               src: p.src, dst: p.dst, x: p.lon, y: p.lat,
             }));
             preloadStatusEl.textContent = 'Computing required grids for preset CRS pairs...';
-            const result = await proj.preloadGrids(pairs, {
+            const result = await preloadGrids(proj, pairs, {
               onProgress: ({ done, total }) => {
                 preloadStatusEl.textContent = `Pre-fetching... ${done}/${total} grids`;
               },
