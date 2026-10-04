@@ -65,6 +65,27 @@ directions, whatever axis order the EPSG registry declares for the CRS.
 
 The package is TypeScript, built with Vite and published with declarations.
 
+### Synchronous use inside your own worker
+
+`createProj` keeps PROJ in its own worker behind an async API. A host that runs a
+synchronous computation in a dedicated worker of its own (for example a Rust/wasm
+pipeline calling back into JavaScript mid-run) cannot await, so
+`@mr-akami/proj-wasm-proj-data/embedded` installs the same Data Version, OPFS grid
+store and transform flow in the calling thread:
+
+```js
+import { createEmbeddedProj } from '@mr-akami/proj-wasm-proj-data/embedded';
+
+const proj = await createEmbeddedProj({ dataBaseUrl: 'https://example.com/proj-data' });
+await proj.prepare('EPSG:6677+EPSG:5773', 'EPSG:4979', new Float64Array([-6000, -35400, 10]));
+const out = proj.transformManySync('EPSG:6677+EPSG:5773', 'EPSG:4979', xyz);
+```
+
+Grids are fetched only by the async `prepare`. `transformManySync` is strict and
+throws `MissingGridError` when a grid it needs is not mounted yet, so the host can
+catch it, `prepare` that pair, and retry. Here `dataBaseUrl` is a plain static
+Data Origin: it reads `manifest.json` and `v/<version>/…` directly.
+
 ### Letting a user choose a coordinate system
 
 `listCrs` answers what applies where the user is working, which is the hard

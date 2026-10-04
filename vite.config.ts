@@ -26,6 +26,7 @@ export default defineConfig({
         index: resolve(import.meta.dirname, 'src/proj-runtime.ts'),
         node: resolve(import.meta.dirname, 'src/node.ts'),
         testing: resolve(import.meta.dirname, 'src/testing.ts'),
+        embedded: resolve(import.meta.dirname, 'src/embedded.ts'),
         'proj-worker': resolve(import.meta.dirname, 'src/proj-worker.ts'),
         'node-worker': resolve(import.meta.dirname, 'src/node-worker.ts'),
       },

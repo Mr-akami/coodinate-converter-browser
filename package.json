@@ -45,7 +45,11 @@
       "types": "./types/src/testing.d.ts",
       "default": "./dist/lib/testing.js"
     },
-    "./wasm": "./dist/proj_wasm.wasm"
+    "./wasm": "./dist/proj_wasm.wasm",
+    "./embedded": {
+      "types": "./types/src/embedded.d.ts",
+      "default": "./dist/lib/embedded.js"
+    }
   },
   "files": [
     "dist/lib/",
