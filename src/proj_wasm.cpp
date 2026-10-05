@@ -111,6 +111,40 @@ void apply_catalog_dir(PJ_CONTEXT* ctx) {
   proj_context_set_database_path(ctx, db_path.c_str(), nullptr, nullptr);
 }
 
+/*
+ * create_crs: proj_create, plus "GDALWKT1:[3D:]<def>", which round-trips
+ * <def> through GDAL-flavoured WKT1 (and then promotes it to 3D). That is the
+ * CRS GDAL builds for GeoTIFF keys naming an EPSG code (libgeotiff's
+ * GTIFGetOGISDefn), promoted and renamed when its heights get a unit: same
+ * datum and projection, but no area of use, which changes the operation PROJ
+ * picks for a 3D source.
+ */
+constexpr char kGdalWkt1Prefix[] = "GDALWKT1:";
+constexpr char k3dPrefix[] = "3D:";
+
+PJ* create_crs(PJ_CONTEXT* ctx, const char* text) {
+  const std::size_t prefix = sizeof(kGdalWkt1Prefix) - 1;
+  if (std::strncmp(text, kGdalWkt1Prefix, prefix) != 0) return proj_create(ctx, text);
+  text += prefix;
+  const bool promote = std::strncmp(text, k3dPrefix, sizeof(k3dPrefix) - 1) == 0;
+  if (promote) text += sizeof(k3dPrefix) - 1;
+  const PjPtr parsed(proj_create(ctx, text));
+  if (!parsed) return nullptr;
+  const char* options[] = {"MULTILINE=NO", nullptr};
+  const char* wkt = proj_as_wkt(ctx, parsed.get(), PJ_WKT1_GDAL, options);
+  if (!wkt) return nullptr;
+  PJ* crs = proj_create(ctx, wkt);
+  if (!promote || !crs) return crs;
+  PJ* promoted = proj_crs_promote_to_3D(ctx, nullptr, crs);
+  proj_destroy(crs);
+  if (!promoted) return nullptr;
+  /* GDAL's unit edit leaves the CRS "unnamed"; keeping the EPSG name would let
+     PROJ identify it and bring the area of use back. */
+  PJ* renamed = proj_alter_name(ctx, promoted, "unnamed");
+  proj_destroy(promoted);
+  return renamed;
+}
+
 bool crs_has_vertical(PJ* crs) {
   if (!crs) return false;
   const PJ_TYPE type = proj_get_type(crs);
@@ -170,8 +204,8 @@ struct CrsPair {
  */
 bool resolve_crs_pair(PJ_CONTEXT* ctx, const char* src, const char* dst,
                       CrsPair* out) {
-  PjPtr src_crs(proj_create(ctx, src));
-  PjPtr dst_crs(proj_create(ctx, dst));
+  PjPtr src_crs(create_crs(ctx, src));
+  PjPtr dst_crs(create_crs(ctx, dst));
   if (!src_crs || !dst_crs) return false;
 
   PJ_TYPE src_type = proj_get_type(src_crs.get());
@@ -347,8 +381,8 @@ bool ensure_strict_selection(const char* src, const char* dst, int* out_code) {
   }
 
   const auto try_list = [&](PJ_CONTEXT* ctx, PROJ_GRID_AVAILABILITY_USE use) {
-    const PjPtr src_crs(proj_create(ctx, src));
-    const PjPtr dst_crs(proj_create(ctx, dst));
+    const PjPtr src_crs(create_crs(ctx, src));
+    const PjPtr dst_crs(create_crs(ctx, dst));
     ObjListPtr list = list_operations(ctx, src_crs.get(), dst_crs.get(), use);
     if (!list || proj_list_get_count(list.get()) <= 0) {
       CrsPair promoted;
@@ -547,8 +581,8 @@ const CachedOperation* prepare_operation(const char* src, const char* dst,
   const char* const* options = allow_ballpark ? nullptr : strict_options;
 
   PjPtr raw;
-  const PjPtr src_as_written(proj_create(s.ctx.get(), src));
-  const PjPtr dst_as_written(proj_create(s.ctx.get(), dst));
+  const PjPtr src_as_written(create_crs(s.ctx.get(), src));
+  const PjPtr dst_as_written(create_crs(s.ctx.get(), dst));
   if (src_as_written && dst_as_written) {
     raw.reset(proj_create_crs_to_crs_from_pj(s.ctx.get(), src_as_written.get(),
                                              dst_as_written.get(), nullptr,

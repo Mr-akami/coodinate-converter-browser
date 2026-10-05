@@ -81,3 +81,26 @@ void test_catalog_strict_selection() {
   PW_CHECK_INT(pw_strict_check(FL_SRC, FL_DST, FL_POINT.x, FL_POINT.y), 1);
   check_matches_reference("Florida once GEOID18 is mounted", FL_SRC, FL_POINT);
 }
+
+// GDALWKT1:3D:<def> is the CRS GDAL builds from GeoTIFF keys (WKT1, no area
+// of use) promoted to 3D. EPSG:3490 (California zone 1, ftUS) at a point south
+// of its area: PROJ picks a different NAD83(NSRS2007) -> WGS 84 operation for
+// the 3D CRS with and without the area. Reference: the WKT C++ sc-tilers built.
+void test_gdal_wkt1_prefix_drops_area_of_use() {
+  constexpr pwtest::Coord SIGN{6421332.4, 1097545.7, 358.7};
+  const auto run = [&](const char* src) {
+    pwtest::Coord c = SIGN;
+    PW_CHECK_INT(pw_transform(src, "EPSG:4979", 1, &c.x, &c.y, &c.z), 0);
+    return c;
+  };
+  const pwtest::Coord plain = run("EPSG:3490");
+  const pwtest::Coord wkt1 = run("GDALWKT1:3D:EPSG:3490");
+  // cs2cs with the C++ WKT gives (37.842689899, -122.485375215).
+  if (!(std::fabs(wkt1.x - -122.485375215) < 1e-8 && std::fabs(wkt1.y - 37.842689899) < 1e-8)) {
+    PW_FAIL("GDALWKT1:3D:EPSG:3490 = (" + pwtest::format_double(wkt1.x) + ", " +
+            pwtest::format_double(wkt1.y) + "), expected the C++ CRS result");
+  }
+  if (!(std::fabs(plain.x - -122.485362034) < 1e-8)) {
+    PW_FAIL("EPSG:3490 no longer takes the other operation: " + pwtest::format_double(plain.x));
+  }
+}
