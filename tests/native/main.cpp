@@ -77,6 +77,8 @@ int main() {
       {"list_crs_measures_areas_that_cross_the_antimeridian",
        test_list_crs_measures_areas_that_cross_the_antimeridian},
       // Sets the catalog for the rest of the process, so it runs last.
+      {"gdal_wkt1_prefix_drops_area_of_use",
+       test_gdal_wkt1_prefix_drops_area_of_use},
       {"catalog_strict_selection", test_catalog_strict_selection},
   };
 
