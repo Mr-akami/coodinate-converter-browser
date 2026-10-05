@@ -18,8 +18,9 @@ int pw_init(const char* data_dir);
  *
  * x, y: input in JS axis order (lon,lat). Pass NaN to skip coordinate-based
  *       suggestion.
- * discard_missing: 0 enumerates the grids of the single best non-ballpark
- *       operation; 1 enumerates the union over the top non-ballpark candidates.
+ * discard_missing: 0 enumerates the grids of the operation strict mode wants
+ *       at the point (unmounted grids carry their file name as fullName);
+ *       1 enumerates the union over the top non-ballpark candidates.
  *
  * Returns a heap string the caller frees with free(), or NULL on failure.
  * *out_status is 0 on success, or:
@@ -31,12 +32,30 @@ char* pw_grids_needed(const char* src, const char* dst, double x, double y,
                       int discard_missing, int* out_status);
 
 /*
- * pw_strict_check: 1 when the best non-ballpark operation for (src,dst) at the
- * given coordinate is instantiable, 0 when it is not, negative on error.
+ * pw_strict_check: 1 when the operation strict mode wants for (src,dst) at
+ * the given coordinate can run with the mounted grids, 0 when it cannot (see
+ * pw_last_missing), negative on error.
  *
  * x, y: JS axis order (lon,lat). Pass NaN to skip coordinate-based selection.
  */
 int pw_strict_check(const char* src, const char* dst, double x, double y);
+
+/*
+ * pw_set_grid_catalog: tell strict mode which grids can be fetched. names is a
+ * newline-separated list of grid file names (Manifest keys); an empty
+ * placeholder for each is created in dir, which must lie outside data_dir.
+ * Strict mode then wants the operation PROJ would pick with all of them on
+ * disk, and reports the ones not mounted yet. Without a catalog every grid in
+ * the database counts. Returns 0 on success, negative on error.
+ */
+int pw_set_grid_catalog(const char* dir, const char* names);
+
+/*
+ * pw_last_missing: JSON {x, y, grids: [file names]} for the last strict
+ * refusal with code 5: the point (JS axis order, null without one) and the
+ * grids its operation needs that are not mounted. Owned by the library.
+ */
+const char* pw_last_missing(void);
 
 /*
  * pw_refresh_after_grid_write: drop the cached operation and recreate the PROJ

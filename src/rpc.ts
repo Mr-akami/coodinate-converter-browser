@@ -20,6 +20,7 @@ interface WorkerReply {
   error?: string;
   errorKind?: MissingGridReason;
   missingGrids?: import('./types.js').GridRef[];
+  point?: { x: number; y: number };
 }
 
 interface PendingRequest {
@@ -34,6 +35,7 @@ function buildReplyError(data: WorkerReply): Error {
     return new MissingGridError(data.error || data.errorKind, {
       reason: data.errorKind,
       missingGrids: data.missingGrids,
+      point: data.point,
     });
   }
   return new Error(data.error || 'proj worker request failed');

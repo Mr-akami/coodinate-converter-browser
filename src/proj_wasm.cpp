@@ -1,6 +1,7 @@
 #include "proj_wasm.h"
 
 #include <proj.h>
+#include <sys/stat.h>
 
 #include <cmath>
 #include <cstddef>
@@ -53,12 +54,37 @@ struct CachedOperation {
   int swap_out = 0;
 };
 
+/*
+ * The candidates strict mode chooses from for one (src, dst), in the context
+ * they were listed with. Kept alive because PROJ caches each operation's area
+ * in the list, which is what makes a per-point choice cheap after the first.
+ */
+struct StrictSelection {
+  std::string src;
+  std::string dst;
+  PJ_CONTEXT* ctx = nullptr;
+  ObjListPtr list;
+  int count = 0;
+  int swap_in = 0;
+  /* Per candidate: -1 not checked yet, 0 runnable, 1 needs an unmounted grid. */
+  std::vector<signed char> missing;
+};
+
 /* ctx is declared first so it is destroyed last: calling proj_destroy on a PJ
    after its PJ_CONTEXT has been destroyed is undefined. */
 struct WrapperState {
   ContextPtr ctx;
+  /* Same database, plus a directory of empty placeholders for every grid the
+     Data Origin can supply: listing operations here with missing grids
+     discarded gives the candidates native PROJ would see with the whole
+     catalog on disk. Null when no catalog was set (Node, native). */
+  ContextPtr catalog_ctx;
   std::string data_dir;
+  std::string catalog_dir;
   CachedOperation cached;
+  StrictSelection strict;
+  /* JSON of the last strict refusal for a missing grid (pw_last_missing). */
+  std::string last_missing;
 };
 
 WrapperState& state() {
@@ -73,6 +99,15 @@ void apply_data_dir(PJ_CONTEXT* ctx, const std::string& data_dir) {
   proj_context_set_search_paths(ctx, 1, paths);
 
   const std::string db_path = data_dir + "/proj.db";
+  proj_context_set_database_path(ctx, db_path.c_str(), nullptr, nullptr);
+}
+
+/* Mounted grids first, so a grid present in both resolves to the real file. */
+void apply_catalog_dir(PJ_CONTEXT* ctx) {
+  const WrapperState& s = state();
+  const char* paths[2] = {s.data_dir.c_str(), s.catalog_dir.c_str()};
+  proj_context_set_search_paths(ctx, 2, paths);
+  const std::string db_path = s.data_dir + "/proj.db";
   proj_context_set_database_path(ctx, db_path.c_str(), nullptr, nullptr);
 }
 
@@ -180,80 +215,6 @@ bool resolve_crs_pair(PJ_CONTEXT* ctx, const char* src, const char* dst,
   return true;
 }
 
-enum class OperationOutcome {
-  kSelected,
-  kBallparkOnly,
-  kFactoryError,
-};
-
-/*
- * select_best_op: returns the best coordinate operation, choosing by
- * coordinate when has_coord is true (uses proj_get_suggested_operation; sx,sy
- * must be in source CRS axis order).
- *
- * kBallparkOnly means the candidate list held no operation the caller accepts,
- * kFactoryError means PROJ could not produce a list at all.
- */
-PjPtr select_best_op(PJ_CONTEXT* ctx, PJ* src_crs, PJ* dst_crs, double sx,
-                     double sy, bool has_coord, bool allow_ballpark,
-                     bool discard_missing, OperationOutcome* outcome) {
-  *outcome = OperationOutcome::kFactoryError;
-  if (!src_crs || !dst_crs) return nullptr;
-
-  const FactoryContextPtr factory(
-      proj_create_operation_factory_context(ctx, nullptr));
-  if (!factory) return nullptr;
-
-  /* discard_missing=true mirrors proj_create_crs_to_crs's default behavior:
-     ops requiring grids we don't have on disk are discarded, so the picked
-     op (which might be ballpark) is always runnable. discard_missing=false
-     surfaces every candidate including ones with missing grids — used by
-     pw_grids_needed, pw_strict_check and the strict transform path to
-     enumerate / verify the theoretically-best op. */
-  proj_operation_factory_context_set_grid_availability_use(
-      ctx, factory.get(),
-      discard_missing ? PROJ_GRID_AVAILABILITY_DISCARD_OPERATION_IF_MISSING_GRID
-                      : PROJ_GRID_AVAILABILITY_IGNORED);
-  /* PARTIAL_INTERSECTION matches proj_create_crs_to_crs's internal default
-     (crs_to_crs.cpp:568). It surfaces regionally-scoped grid ops (NADCON
-     CONUS, NTv2 etc.) for points within their extent, which is the
-     behavior we want for accurate transformations. */
-  proj_operation_factory_context_set_spatial_criterion(
-      ctx, factory.get(), PROJ_SPATIAL_CRITERION_PARTIAL_INTERSECTION);
-  proj_operation_factory_context_set_allow_ballpark_transformations(
-      ctx, factory.get(), allow_ballpark ? 1 : 0);
-
-  const ObjListPtr list(
-      proj_create_operations(ctx, src_crs, dst_crs, factory.get()));
-  if (!list) return nullptr;
-
-  const int count = proj_list_get_count(list.get());
-  if (count <= 0) {
-    *outcome = OperationOutcome::kBallparkOnly;
-    return nullptr;
-  }
-
-  int index = 0;
-  if (has_coord) {
-    const PJ_COORD coord = proj_coord(sx, sy, 0.0, HUGE_VAL);
-    const int suggested =
-        proj_get_suggested_operation(ctx, list.get(), PJ_FWD, coord);
-    if (suggested >= 0 && suggested < count) index = suggested;
-  }
-  PjPtr op(proj_list_get(ctx, list.get(), index));
-  if (!op) return nullptr;
-
-  /* When the caller forbade ballpark, double-check the chosen op too. */
-  if (!allow_ballpark &&
-      proj_coordoperation_has_ballpark_transformation(ctx, op.get()) == 1) {
-    *outcome = OperationOutcome::kBallparkOnly;
-    return nullptr;
-  }
-
-  *outcome = OperationOutcome::kSelected;
-  return op;
-}
-
 void append_json_string(std::string* out, const char* value) {
   out->push_back('"');
   for (const char* p = value ? value : ""; *p != '\0'; ++p) {
@@ -316,6 +277,197 @@ char* duplicate(const std::string& text) {
   return copy;
 }
 
+std::string basename_of(const char* path) {
+  if (!path) return "";
+  const char* slash = std::strrchr(path, '/');
+  return slash ? slash + 1 : path;
+}
+
+/* The file name PROJ opens for a grid, which is also its Manifest key: the
+   resolved file when there is one (legacy names map to it through
+   grid_alternatives), else the CDN name, else the name in the database. */
+std::string grid_file_name(const char* full_name, const char* url,
+                           const char* short_name) {
+  std::string name = basename_of(full_name);
+  if (name.empty() && url && *url) {
+    name = basename_of(url);
+    const std::size_t query = name.find('?');
+    if (query != std::string::npos) name.resize(query);
+  }
+  if (name.empty() && short_name) name = short_name;
+  return name;
+}
+
+bool is_catalog_placeholder(const char* full_name) {
+  const WrapperState& s = state();
+  if (s.catalog_dir.empty() || !full_name) return false;
+  const std::string prefix = s.catalog_dir + "/";
+  return std::strncmp(full_name, prefix.c_str(), prefix.size()) == 0;
+}
+
+ObjListPtr list_operations(PJ_CONTEXT* ctx, PJ* src_crs, PJ* dst_crs,
+                           PROJ_GRID_AVAILABILITY_USE use) {
+  if (!src_crs || !dst_crs) return nullptr;
+  const FactoryContextPtr factory(
+      proj_create_operation_factory_context(ctx, nullptr));
+  if (!factory) return nullptr;
+  proj_operation_factory_context_set_grid_availability_use(ctx, factory.get(),
+                                                           use);
+  proj_operation_factory_context_set_spatial_criterion(
+      ctx, factory.get(), PROJ_SPATIAL_CRITERION_PARTIAL_INTERSECTION);
+  proj_operation_factory_context_set_allow_ballpark_transformations(
+      ctx, factory.get(), 0);
+  return ObjListPtr(proj_create_operations(ctx, src_crs, dst_crs, factory.get()));
+}
+
+/*
+ * ensure_strict_selection: list the candidates strict mode chooses from.
+ *
+ * With a catalog these are the operations native PROJ keeps when every grid
+ * the Data Origin carries is on disk, so strict picks exactly what cs2cs would
+ * pick with the full data set, and an operation over a grid nobody ships (the
+ * 1x1 EGM2008 one, say) gives way to the next one as it does natively. Without
+ * a catalog, or when the catalog supports no accurate operation, every grid
+ * counts, so what is missing is still reported rather than worked around.
+ *
+ * The CRS are taken as written first, like prepare_operation.
+ */
+bool ensure_strict_selection(const char* src, const char* dst, int* out_code) {
+  WrapperState& s = state();
+  StrictSelection& sel = s.strict;
+  if (sel.list && sel.src == src && sel.dst == dst) return true;
+  sel.list.reset();
+  sel.count = 0;
+  sel.missing.clear();
+
+  CrsPair pair;
+  if (!resolve_crs_pair(s.ctx.get(), src, dst, &pair)) {
+    *out_code = 3;
+    return false;
+  }
+
+  const auto try_list = [&](PJ_CONTEXT* ctx, PROJ_GRID_AVAILABILITY_USE use) {
+    const PjPtr src_crs(proj_create(ctx, src));
+    const PjPtr dst_crs(proj_create(ctx, dst));
+    ObjListPtr list = list_operations(ctx, src_crs.get(), dst_crs.get(), use);
+    if (!list || proj_list_get_count(list.get()) <= 0) {
+      CrsPair promoted;
+      if (resolve_crs_pair(ctx, src, dst, &promoted)) {
+        list = list_operations(ctx, promoted.src.get(), promoted.dst.get(), use);
+      }
+    }
+    if (!list || proj_list_get_count(list.get()) <= 0) return false;
+    sel.ctx = ctx;
+    sel.count = proj_list_get_count(list.get());
+    sel.list = std::move(list);
+    return true;
+  };
+
+  const bool listed =
+      (s.catalog_ctx &&
+       try_list(s.catalog_ctx.get(),
+                PROJ_GRID_AVAILABILITY_DISCARD_OPERATION_IF_MISSING_GRID)) ||
+      try_list(s.ctx.get(), PROJ_GRID_AVAILABILITY_IGNORED);
+  if (!listed) {
+    *out_code = 6;
+    return false;
+  }
+  sel.src = src;
+  sel.dst = dst;
+  sel.swap_in = pair.swap_in;
+  sel.missing.assign(static_cast<std::size_t>(sel.count), -1);
+  return true;
+}
+
+/* The candidate PROJ would run at (x, y) (JS axis order), or 0 without a
+   point or when no candidate's area holds it. */
+int strict_index(double x, double y, bool has_coord) {
+  const StrictSelection& sel = state().strict;
+  if (!has_coord || sel.count <= 1) return 0;
+  const double sx = sel.swap_in ? y : x;
+  const double sy = sel.swap_in ? x : y;
+  const int index = proj_get_suggested_operation(
+      sel.ctx, sel.list.get(), PJ_FWD, proj_coord(sx, sy, 0.0, HUGE_VAL));
+  return (index >= 0 && index < sel.count) ? index : 0;
+}
+
+/* Calls visit(short, full, package, url, available, file_name, mounted) for
+   each grid of candidate `index`. */
+template <typename Visit>
+void for_each_strict_grid(int index, Visit visit) {
+  const StrictSelection& sel = state().strict;
+  const PjPtr op(proj_list_get(sel.ctx, sel.list.get(), index));
+  if (!op) return;
+  const int grid_count = proj_coordoperation_get_grid_used_count(sel.ctx, op.get());
+  for (int i = 0; i < grid_count; ++i) {
+    const char* short_name = nullptr;
+    const char* full_name = nullptr;
+    const char* package_name = nullptr;
+    const char* url = nullptr;
+    int direct_download = 0;
+    int open_license = 0;
+    int available = 0;
+    if (!proj_coordoperation_get_grid_used(sel.ctx, op.get(), i, &short_name,
+                                           &full_name, &package_name, &url,
+                                           &direct_download, &open_license,
+                                           &available)) {
+      continue;
+    }
+    const bool mounted = available && !is_catalog_placeholder(full_name);
+    visit(short_name, full_name, package_name, url,
+          grid_file_name(full_name, url, short_name), mounted);
+  }
+}
+
+bool strict_candidate_missing(int index) {
+  StrictSelection& sel = state().strict;
+  signed char& known = sel.missing[static_cast<std::size_t>(index)];
+  if (known < 0) {
+    known = 0;
+    for_each_strict_grid(index, [&](const char*, const char*, const char*,
+                                    const char*, const std::string&,
+                                    bool mounted) {
+      if (!mounted) known = 1;
+    });
+  }
+  return known == 1;
+}
+
+/*
+ * strict_check_point: 0 when the operation strict mode wants at (x, y) can run
+ * with the mounted grids, else the pw_transform code (5 missing grid, 6 no
+ * accurate operation, 3 CRS failure). On 5, last_missing names the grids and
+ * the point so a host can fetch them and retry.
+ */
+int strict_check_point(const char* src, const char* dst, double x, double y,
+                       bool has_coord) {
+  int code = 3;
+  if (!ensure_strict_selection(src, dst, &code)) return code;
+  const int index = strict_index(x, y, has_coord);
+  if (!strict_candidate_missing(index)) return 0;
+
+  WrapperState& s = state();
+  s.last_missing = "{\"x\":";
+  char buffer[64];
+  std::snprintf(buffer, sizeof(buffer), "%.17g", has_coord ? x : 0.0);
+  s.last_missing += has_coord ? buffer : "null";
+  s.last_missing += ",\"y\":";
+  std::snprintf(buffer, sizeof(buffer), "%.17g", has_coord ? y : 0.0);
+  s.last_missing += has_coord ? buffer : "null";
+  s.last_missing += ",\"grids\":[";
+  bool first = true;
+  for_each_strict_grid(index, [&](const char*, const char*, const char*,
+                                  const char*, const std::string& name,
+                                  bool mounted) {
+    if (mounted) return;
+    if (!first) s.last_missing.push_back(',');
+    append_json_string(&s.last_missing, name.c_str());
+    first = false;
+  });
+  s.last_missing += "]}";
+  return 5;
+}
+
 /*
  * prepare_operation: return the cached operation for this call, resolving it
  * when the key changed. On failure *out_code holds the pw_transform code.
@@ -374,24 +526,11 @@ const CachedOperation* prepare_operation(const char* src, const char* dst,
     return nullptr;
   }
 
-  /* Strict still enumerates first, so a missing grid is reported as such
-     instead of being replaced by something less accurate. Enumerating as if
-     every grid were present is what makes the difference between "we cannot
-     do this at all" (6) and "fetch this grid and retry" (5) visible. */
-  if (!allow_ballpark) {
-    OperationOutcome outcome = OperationOutcome::kFactoryError;
-    const PjPtr best =
-        select_best_op(s.ctx.get(), pair.src.get(), pair.dst.get(), 0.0, 0.0,
-                       /*has_coord=*/false, /*allow_ballpark=*/false,
-                       /*discard_missing=*/false, &outcome);
-    if (!best) {
-      *out_code = (outcome == OperationOutcome::kBallparkOnly) ? 6 : 3;
-      return nullptr;
-    }
-    if (proj_coordoperation_is_instantiable(s.ctx.get(), best.get()) != 1) {
-      *out_code = 5;
-      return nullptr;
-    }
+  /* Strict refuses up front when no accurate operation exists at all (6).
+     Whether the one it wants is runnable depends on the point, so that is
+     checked per point in transform_point. */
+  if (!allow_ballpark && !ensure_strict_selection(src, dst, out_code)) {
+    return nullptr;
   }
 
   /* Prefer the CRS as written, which is what cs2cs hands to PROJ. Passing the
@@ -449,6 +588,14 @@ int transform_point(const char* src, const char* dst, bool allow_ballpark,
       prepare_operation(src, dst, allow_ballpark, &code);
   if (!entry) return code;
 
+  /* PROJ drops candidates whose grids are not mounted and quietly runs a less
+     accurate one, so strict checks the point against what it would run with
+     the whole catalog present (5 means: fetch last_missing and retry). */
+  if (!allow_ballpark) {
+    const int strict_code = strict_check_point(src, dst, *x, *y, true);
+    if (strict_code != 0) return strict_code;
+  }
+
   const double in_x = entry->swap_in ? *y : *x;
   const double in_y = entry->swap_in ? *x : *y;
 
@@ -495,25 +642,42 @@ char* pw_grids_needed(const char* src, const char* dst, double x, double y,
   }
 
   const bool has_coord = !std::isnan(x) && !std::isnan(y);
-  /* Apply swap_in to put coord into source CRS axis order before passing
-     to PROJ's suggested-operation API. */
-  const double sx = pair.swap_in ? y : x;
-  const double sy = pair.swap_in ? x : y;
 
-  /* discard_missing=0: enumerate the IDEAL non-ballpark op's grids. Used
-     to decide what to fetch initially (PROJ may report a grid that isn't
-     in our bundle, in which case the caller should follow up with
-     discard_missing=1).
-     discard_missing=1: enumerate the union of grids referenced by the
-     top-N IGNORED-mode candidates. PROJ's plain DISCARD_MISSING mode
-     would only see currently-mounted grids, so it can't help us discover
-     what to fetch. By collecting grid names across the top several
-     non-ballpark candidates we surface fallback ops (e.g. 2.5x2.5 EGM2008
-     when the 1x1 grid isn't in the bundle). */
-  PjPtr op;
+  /* discard_missing=0 reports the operation strict mode wants at the point,
+     so what it lists is exactly what a strict transform there will need.
+     Grids not mounted carry their file name (the Manifest key) as fullName. */
+  if (!discard_missing) {
+    int code = 3;
+    if (!ensure_strict_selection(src, dst, &code)) {
+      *out_status = code == 6 ? -3 : -2;
+      return nullptr;
+    }
+    std::vector<std::string> seen;
+    std::string json = "[";
+    for_each_strict_grid(
+        strict_index(x, y, has_coord),
+        [&](const char* short_name, const char* full_name,
+            const char* package_name, const char* url, const std::string& name,
+            bool mounted) {
+          if (!short_name || contains(seen, short_name)) return;
+          append_grid(&json, seen.empty(), short_name,
+                      mounted ? full_name : name.c_str(), package_name, url,
+                      mounted ? 1 : 0);
+          seen.emplace_back(short_name);
+        });
+    json.push_back(']');
+    char* result = duplicate(json);
+    if (!result) return nullptr;
+    *out_status = 0;
+    return result;
+  }
+
+  /* discard_missing=1: the union of grids referenced by the top-N
+     IGNORED-mode candidates. PROJ's plain DISCARD_MISSING mode would only see
+     currently-mounted grids, so it can't help us discover what to fetch. */
   ObjListPtr candidates;
   int candidate_count = 0;
-  if (discard_missing) {
+  {
     const FactoryContextPtr factory(
         proj_create_operation_factory_context(s.ctx.get(), nullptr));
     if (factory) {
@@ -529,15 +693,6 @@ char* pw_grids_needed(const char* src, const char* dst, double x, double y,
     }
     if (!candidates) {
       *out_status = -2;
-      return nullptr;
-    }
-  } else {
-    OperationOutcome outcome = OperationOutcome::kFactoryError;
-    op = select_best_op(s.ctx.get(), pair.src.get(), pair.dst.get(), sx, sy,
-                        has_coord, /*allow_ballpark=*/false,
-                        /*discard_missing=*/false, &outcome);
-    if (!op) {
-      *out_status = outcome == OperationOutcome::kBallparkOnly ? -3 : -2;
       return nullptr;
     }
   }
@@ -574,8 +729,6 @@ char* pw_grids_needed(const char* src, const char* dst, double x, double y,
       seen.emplace_back(short_name);
     }
   };
-
-  if (op) append_grids_of(op.get());
 
   for (int i = 0; i < candidate_count; ++i) {
     const PjPtr candidate(proj_list_get(s.ctx.get(), candidates.get(), i));
@@ -808,25 +961,41 @@ int pw_strict_check(const char* src, const char* dst, double x, double y) {
   if (!src || !dst) return -1;
   if (!s.ctx) return -2;
 
-  CrsPair pair;
-  if (!resolve_crs_pair(s.ctx.get(), src, dst, &pair)) return -2;
-
   const bool has_coord = !std::isnan(x) && !std::isnan(y);
-  const double sx = pair.swap_in ? y : x;
-  const double sy = pair.swap_in ? x : y;
-
-  /* strict_check verifies the best NON-ballpark op is instantiable;
-     a 0 result means callers should treat the missing-grid condition as
-     significant (silent ballpark substitution would otherwise hide it). */
-  OperationOutcome outcome = OperationOutcome::kFactoryError;
-  const PjPtr op =
-      select_best_op(s.ctx.get(), pair.src.get(), pair.dst.get(), sx, sy,
-                     has_coord, /*allow_ballpark=*/false,
-                     /*discard_missing=*/false, &outcome);
-  if (!op) return 0;
-
-  return proj_coordoperation_is_instantiable(s.ctx.get(), op.get()) == 1 ? 1 : 0;
+  const int code = strict_check_point(src, dst, x, y, has_coord);
+  if (code == 3) return -2;
+  return code == 0 ? 1 : 0;
 }
+
+int pw_set_grid_catalog(const char* dir, const char* names) {
+  WrapperState& s = state();
+  if (!dir || !names) return -1;
+  if (!s.ctx) return -2;
+
+  /* Empty files are enough: PROJ only checks that a grid opens when it lists
+     operations, and this context is never used to transform. */
+  mkdir(dir, 0755);
+  for (const char* p = names; *p != '\0';) {
+    const char* end = std::strchr(p, '\n');
+    const std::size_t length = end ? static_cast<std::size_t>(end - p) : std::strlen(p);
+    const std::string name(p, length);
+    if (!name.empty() && name.find('/') == std::string::npos) {
+      const std::string path = std::string(dir) + "/" + name;
+      if (std::FILE* file = std::fopen(path.c_str(), "ab")) std::fclose(file);
+    }
+    if (!end) break;
+    p = end + 1;
+  }
+
+  s.strict = StrictSelection();
+  s.catalog_dir = dir;
+  s.catalog_ctx.reset(proj_context_create());
+  if (!s.catalog_ctx) return -2;
+  apply_catalog_dir(s.catalog_ctx.get());
+  return 0;
+}
+
+const char* pw_last_missing(void) { return state().last_missing.c_str(); }
 
 int pw_refresh_after_grid_write(void) {
   WrapperState& s = state();
@@ -836,6 +1005,7 @@ int pw_refresh_after_grid_write(void) {
      would otherwise keep running a pipeline built without the new grids, and
      it must not outlive the context it belongs to. */
   s.cached.op.reset();
+  s.strict = StrictSelection();
 
   /* Recreate the whole context so every PROJ-side cache (database grid info,
      network chunk cache, internal proj.db query cache) is dropped. Phase 0
@@ -845,6 +1015,11 @@ int pw_refresh_after_grid_write(void) {
   if (!s.ctx) return -2;
 
   apply_data_dir(s.ctx.get(), s.data_dir);
+  if (s.catalog_ctx) {
+    s.catalog_ctx.reset(proj_context_create());
+    if (!s.catalog_ctx) return -2;
+    apply_catalog_dir(s.catalog_ctx.get());
+  }
   return 0;
 }
 

@@ -159,6 +159,7 @@ function errorReply(id: unknown, err: any) {
     error: string;
     errorKind?: string;
     missingGrids?: unknown;
+    point?: unknown;
   } = {
     type: 'error',
     id,
@@ -167,6 +168,7 @@ function errorReply(id: unknown, err: any) {
   if (err instanceof MissingGridError) {
     reply.errorKind = err.reason;
     reply.missingGrids = err.missingGrids;
+    if (err.point) reply.point = err.point;
   }
   return reply;
 }

@@ -79,6 +79,10 @@ export function createTransformFlow({ projModule, gridProvider, manifest }: {
   // Once a pair is known to have an instantiable non-ballpark operation with
   // the mounted grids, repeat calls skip the check until grids change.
   const strictCheckedOk = new Set<string>();
+  // Node reading a local directory has no Manifest: every grid PROJ knows
+  // counts there, and what is missing is permanent.
+  const catalog = Object.keys(manifest.grids ?? {});
+  if (catalog.length > 0) projModule.setGridCatalog(catalog);
 
   function refreshMounts(): void {
     projModule.refreshAfterGridWrite();

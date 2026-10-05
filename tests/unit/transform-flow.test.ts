@@ -64,6 +64,7 @@ function harness(options: HarnessOptions = {}) {
       log.push(`gridsNeeded:${discardMissing}:${src}|${dst}|${x}|${y}`);
       return enumerate(discardMissing);
     },
+    setGridCatalog() {},
     strictCheck(src: string, dst: string) {
       log.push(`strictCheck:${src}|${dst}`);
       return strictCheck();

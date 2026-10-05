@@ -26,3 +26,4 @@ void test_list_crs_filters_by_authority();
 void test_list_crs_carries_what_a_chooser_needs();
 void test_list_crs_rejects_a_point_it_cannot_use();
 void test_list_crs_measures_areas_that_cross_the_antimeridian();
+void test_catalog_strict_selection();

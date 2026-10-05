@@ -112,6 +112,8 @@ export interface ProjModule {
     src: string, dst: string, x: number, y: number, discardMissing: number,
   ): EnumeratedGrid[];
   strictCheck(src: string, dst: string, x: number, y: number): number;
+  /** Grids the Data Origin can supply; strict mode then wants what PROJ would run with all of them. */
+  setGridCatalog(names: string[]): void;
   transform(
     src: string, dst: string, x: number, y: number, z: number,
     allowBallpark?: boolean,
