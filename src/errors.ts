@@ -22,6 +22,8 @@ export const MISSING_GRID_REASONS: MissingGridReason[] = [
 export interface MissingGridInfo {
   reason: MissingGridReason;
   missingGrids?: GridRef[];
+  /** Where a strict transform needed them (input axis order), when known. */
+  point?: { x: number; y: number };
   cause?: unknown;
 }
 
@@ -29,11 +31,13 @@ export class MissingGridError extends Error {
   readonly name = 'MissingGridError';
   readonly reason: MissingGridReason;
   readonly missingGrids: GridRef[] | undefined;
+  readonly point: { x: number; y: number } | undefined;
 
   constructor(message: string, info: MissingGridInfo) {
     super(message);
     this.reason = info.reason;
     this.missingGrids = info.missingGrids;
+    this.point = info.point;
     if (info.cause !== undefined) this.cause = info.cause;
   }
 }

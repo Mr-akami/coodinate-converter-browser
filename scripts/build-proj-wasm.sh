@@ -235,7 +235,7 @@ emcc "${WRAPPER_SRC}" "${FINAL_LIBS[@]}" \
   -sFILESYSTEM=1 \
   -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 \
-  -sEXPORTED_FUNCTIONS='["_pw_init","_pw_transform","_pw_transform_many","_pw_describe","_pw_list_crs","_pw_grids_needed","_pw_strict_check","_pw_refresh_after_grid_write","_malloc","_free"]' \
+  -sEXPORTED_FUNCTIONS='["_pw_init","_pw_transform","_pw_transform_many","_pw_describe","_pw_list_crs","_pw_grids_needed","_pw_strict_check","_pw_refresh_after_grid_write","_pw_set_grid_catalog","_pw_last_missing","_malloc","_free"]' \
   -sEXPORTED_RUNTIME_METHODS='["ccall","FS","NODEFS","HEAP32","HEAPF64","UTF8ToString"]' \
   -lworkerfs.js \
   -lnodefs.js \

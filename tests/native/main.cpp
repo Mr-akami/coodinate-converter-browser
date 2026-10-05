@@ -76,6 +76,8 @@ int main() {
        test_list_crs_rejects_a_point_it_cannot_use},
       {"list_crs_measures_areas_that_cross_the_antimeridian",
        test_list_crs_measures_areas_that_cross_the_antimeridian},
+      // Sets the catalog for the rest of the process, so it runs last.
+      {"catalog_strict_selection", test_catalog_strict_selection},
   };
 
   return pwtest::run(cases, sizeof(cases) / sizeof(cases[0]));

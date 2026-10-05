@@ -23,6 +23,9 @@ const TRANSFORM_BALLPARK_ONLY = 6;
  * the real directory is mounted, so PROJ reads proj.db and every grid straight
  * off the disk they already sit on, with nothing copied and nothing to fetch.
  */
+// Empty placeholders for the catalog's grids; outside memfsPath so PROJ never opens them to transform.
+const CATALOG_DIR = '/proj-catalog';
+
 export async function createProjModule({
   moduleUrl, wasmUrl, memfsPath, projDbBytes, nodeDataDir,
 }: {
@@ -50,6 +53,21 @@ export async function createProjModule({
   if (rc !== 0) throw new Error(`pw_init failed: ${rc}`);
 
   const coordinate = (value: number) => (Number.isFinite(value) ? value : NaN);
+
+  // Code 5 leaves the grids and the point in pw_last_missing, so a host can
+  // fetch exactly those and retry from the point that failed.
+  const missingGridError = (src: string, dst: string) => {
+    const last = JSON.parse(Module.UTF8ToString(Module.ccall('pw_last_missing', 'number', [], [])));
+    const names: string[] = last.grids ?? [];
+    return new MissingGridError(
+      `missing grid for ${src} to ${dst}${names.length ? `: ${names.join(', ')}` : ''}`,
+      {
+        reason: 'missing_grid',
+        missingGrids: names.map((name) => ({ shortName: name, fullName: name, url: '' })),
+        point: last.x == null ? undefined : { x: last.x, y: last.y },
+      },
+    );
+  };
 
   return {
     fs: Module.FS,
@@ -79,6 +97,13 @@ export async function createProjModule({
       }
     },
 
+    setGridCatalog(names: string[]): void {
+      const status = Module.ccall(
+        'pw_set_grid_catalog', 'number', ['string', 'string'], [CATALOG_DIR, names.join('\n')],
+      );
+      if (status !== 0) throw new Error(`pw_set_grid_catalog failed: ${status}`);
+    },
+
     strictCheck(src: string, dst: string, x: number, y: number): number {
       return Module.ccall(
         'pw_strict_check',
@@ -105,7 +130,7 @@ export async function createProjModule({
         );
 
         if (status === TRANSFORM_MISSING_GRID) {
-          throw new MissingGridError(`missing grid for ${src} to ${dst}`, { reason: 'missing_grid' });
+          throw missingGridError(src, dst);
         }
         if (status === TRANSFORM_BALLPARK_ONLY) {
           throw new MissingGridError(`ballpark only for ${src} to ${dst}`, { reason: 'ballpark_only' });
@@ -154,7 +179,7 @@ export async function createProjModule({
           );
         }
         if (status === -TRANSFORM_MISSING_GRID) {
-          throw new MissingGridError(`missing grid for ${src} to ${dst}`, { reason: 'missing_grid' });
+          throw missingGridError(src, dst);
         }
         if (status === -TRANSFORM_BALLPARK_ONLY) {
           throw new MissingGridError(`ballpark only for ${src} to ${dst}`, { reason: 'ballpark_only' });
